@@ -17,6 +17,17 @@ const ITEM_COLUMNS = `
 const FROM_ITEMS = 'FROM items i JOIN accounts a ON a.id = i.owner_id';
 
 /**
+ * 变更描述：领域层只说「发生了什么、影响谁」，怎么送达由适配层决定。
+ * 写操作一律返回 { item, changed }，routes 拿到后交给 sse.publish。
+ */
+const ownerChanged = (kind, item) => ({
+  to: 'itemOwners',
+  ownerIds: [item.owner_id],
+  kind,
+  itemId: item.id,
+});
+
+/**
  * 校验并归一化事项输入。requireAll=true 时所有必填字段都必须出现（新建）；
  * 否则只校验出现的字段（部分更新）。
  */
@@ -129,7 +140,7 @@ export function createItem(account, input) {
   const ownerId = values.owner_id ?? account.id;
   const now = new Date().toISOString();
 
-  return tx(() => {
+  const item = tx(() => {
     const color = pickColor();
     const info = db
       .prepare(
@@ -139,6 +150,8 @@ export function createItem(account, input) {
       .run(ownerId, values.title, values.event_date, values.due_date, values.tag, color, now, now);
     return getItem(Number(info.lastInsertRowid));
   });
+
+  return { item, changed: [ownerChanged('created', item)] };
 }
 
 export function updateItem(account, id, input) {
@@ -159,7 +172,7 @@ export function updateItem(account, id, input) {
   const expectedVersion = Number(input.version);
   if (!Number.isInteger(expectedVersion)) throw httpError(400, '更新时必须带上 version');
 
-  return tx(() => {
+  const item = tx(() => {
     const sets = [];
     const params = [];
     for (const [key, value] of Object.entries(values)) {
@@ -180,6 +193,17 @@ export function updateItem(account, id, input) {
     }
     return getItem(id);
   });
+
+  // 归属易主时新旧 owner 的看板都要刷新——这件事只有这里知道
+  const changed =
+    current.owner_id !== item.owner_id
+      ? [
+          { to: 'itemOwners', ownerIds: [current.owner_id], kind: 'transferred-away', itemId: id },
+          { to: 'itemOwners', ownerIds: [item.owner_id], kind: 'transferred-in', itemId: id },
+        ]
+      : [ownerChanged('updated', item)];
+
+  return { item, changed };
 }
 
 /** 归档（不可逆）。需要版本匹配，避免覆盖他人刚做的修改。 */
@@ -190,7 +214,7 @@ export function archiveItem(account, id, expectedVersion) {
   const version = Number(expectedVersion);
   if (!Number.isInteger(version)) throw httpError(400, '归档时必须带上 version');
 
-  return tx(() => {
+  const item = tx(() => {
     const info = db
       .prepare(
         `UPDATE items SET archived_at = ?, version = version + 1 WHERE id = ? AND version = ?`,
@@ -202,13 +226,15 @@ export function archiveItem(account, id, expectedVersion) {
     }
     return getItem(id);
   });
+
+  return { item, changed: [ownerChanged('archived', item)] };
 }
 
 export function deleteItem(account, id) {
-  const current = requireItemAccess(account, id);
+  const item = requireItemAccess(account, id);
   const info = db.prepare('DELETE FROM items WHERE id = ?').run(id);
   if (info.changes === 0) throw httpError(404, '事项不存在');
-  return current;
+  return { item, changed: [ownerChanged('deleted', item)] };
 }
 
 /** 某账号名下未归档事项数（删账号前的转移检查用）。 */

@@ -64,6 +64,24 @@ export function broadcastToAccount(accountId, kind, payload = {}) {
   }
 }
 
+/**
+ * 把领域层返回的「变更描述」翻译成推送。
+ *
+ * 领域操作只说发生了什么、影响谁（to: itemOwners / admins / accounts），
+ * 由这里决定怎么送达 —— 于是 routes 里不再有广播策略。
+ */
+export function publish(changes = []) {
+  for (const change of changes) {
+    if (change.to === 'itemOwners') {
+      for (const ownerId of change.ownerIds) broadcastItems(ownerId, change.kind, change.itemId ?? null);
+    } else if (change.to === 'admins') {
+      broadcastAdmin(change.kind);
+    } else if (change.to === 'accounts') {
+      for (const accountId of change.accountIds) broadcastToAccount(accountId, change.kind);
+    }
+  }
+}
+
 export function clientCount() {
   return clients.size;
 }

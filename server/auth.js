@@ -37,6 +37,7 @@ export function verifyPassword(password, stored) {
   }
 }
 
+/** 签发会话。返回 token 与变更描述——「该账号其它客户端要重新拉取」这件事在这里说。 */
 export function createSession(accountId) {
   const token = randomBytes(32).toString('base64url');
   const now = Date.now();
@@ -46,7 +47,10 @@ export function createSession(accountId) {
     new Date(now).toISOString(),
     new Date(now + LIMITS.SESSION_TTL_DAYS * DAY_MS).toISOString(),
   );
-  return token;
+  return {
+    token,
+    changed: [{ to: 'accounts', accountIds: [accountId], kind: 'signed-in' }],
+  };
 }
 
 export function deleteSession(token) {

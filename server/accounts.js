@@ -63,6 +63,8 @@ export function submitRegistrationRequest(input) {
   db.prepare(
     'INSERT INTO registration_requests (username, password_hash, note, created_at) VALUES (?, ?, ?, ?)',
   ).run(u.value, hashPassword(p.value), note, new Date().toISOString());
+
+  return { changed: [{ to: 'admins', kind: 'requests' }] };
 }
 
 /** 待批准申请列表。刻意不返回 password_hash。 */
@@ -80,19 +82,30 @@ export function approveRequest(id) {
     throw httpError(409, `用户名「${req.username}」已被占用，无法批准；可先拒绝该申请`);
   }
 
-  return tx(() => {
+  const account = tx(() => {
     const info = db
       .prepare('INSERT INTO accounts (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)')
       .run(req.username, req.password_hash, 'user', new Date().toISOString());
     db.prepare('DELETE FROM registration_requests WHERE id = ?').run(id);
     return { id: Number(info.lastInsertRowid), username: req.username, role: 'user' };
   });
+
+  return {
+    account,
+    changed: [
+      { to: 'admins', kind: 'accounts' },
+      { to: 'admins', kind: 'requests' },
+      // 申请人自己的其它客户端立刻可用
+      { to: 'accounts', accountIds: [account.id], kind: 'approved' },
+    ],
+  };
 }
 
 /** 拒绝申请：直接删除记录，对方可重新提交。 */
 export function rejectRequest(id) {
   const info = db.prepare('DELETE FROM registration_requests WHERE id = ?').run(id);
   if (info.changes === 0) throw httpError(404, '注册申请不存在');
+  return { changed: [{ to: 'admins', kind: 'requests' }] };
 }
 
 export function listAccounts() {
@@ -122,7 +135,7 @@ export function changeRole(actorId, targetId, role) {
   if (!ROLES.includes(role)) throw httpError(400, '角色不合法');
   const target = db.prepare('SELECT id, username, role FROM accounts WHERE id = ?').get(targetId);
   if (!target) throw httpError(404, '账号不存在');
-  if (target.role === role) return target;
+  if (target.role === role) return { account: target, changed: [] };
 
   if (target.role === 'admin' && role !== 'admin') {
     const admins = db.prepare(`SELECT COUNT(*) AS n FROM accounts WHERE role = 'admin'`).get().n;
@@ -130,7 +143,14 @@ export function changeRole(actorId, targetId, role) {
   }
 
   db.prepare('UPDATE accounts SET role = ? WHERE id = ?').run(role, targetId);
-  return { ...target, role };
+  return {
+    account: { ...target, role },
+    changed: [
+      { to: 'admins', kind: 'accounts' },
+      // 角色变了，对方必须重新拉取，越权数据要立刻从他的客户端消失
+      { to: 'accounts', accountIds: [targetId], kind: 'role-changed' },
+    ],
+  };
 }
 
 /**
@@ -159,12 +179,14 @@ export function deleteAccount(actorId, targetId) {
     .prepare('SELECT COUNT(*) AS n FROM items WHERE owner_id = ? AND archived_at IS NOT NULL')
     .get(target.id).n;
 
-  return tx(() => {
+  const removed = tx(() => {
     db.prepare('DELETE FROM items WHERE owner_id = ?').run(target.id);
     db.prepare('DELETE FROM sessions WHERE account_id = ?').run(target.id);
     db.prepare('DELETE FROM accounts WHERE id = ?').run(target.id);
     return { ...target, deletedArchivedItems: archived };
   });
+
+  return { removed, changed: [{ to: 'admins', kind: 'accounts' }] };
 }
 
 /** 把 fromId 名下全部事项转给 toId。 */
@@ -176,7 +198,16 @@ export function transferItems(fromId, toId) {
   if (from.id === to.id) throw httpError(400, '源账号与目标账号相同');
 
   const moved = transferAllItems(from.id, to.id);
-  return { from, to, moved };
+  return {
+    from,
+    to,
+    moved,
+    changed: [
+      { to: 'itemOwners', ownerIds: [from.id], kind: 'transferred-away' },
+      { to: 'itemOwners', ownerIds: [to.id], kind: 'transferred-in' },
+      { to: 'admins', kind: 'accounts' },
+    ],
+  };
 }
 
 /**
