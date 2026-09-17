@@ -32,9 +32,10 @@ export function createItems(store, colors) {
 
   /**
    * 校验并归一化事项输入。requireAll=true 时所有必填字段都必须出现（新建）；
-   * 否则只校验出现的字段（部分更新）。
+   * 否则只校验出现的字段（部分更新）。current 是这条事项的现有值——部分更新时
+   * 用它补齐没传的字段，否则「截止不得早于起始」这条不变量会漏判。
    */
-  function normalizeItemInput(input, { requireAll }) {
+  function normalizeItemInput(input, { requireAll, current = null }) {
     const errors = {};
     const values = {};
 
@@ -79,8 +80,15 @@ export function createItems(store, colors) {
       }
     }
 
-    // 截止不得早于起始：合并已有值与新值后判断
-    if (values.event_date && values.due_date && values.due_date < values.event_date) {
+    // 截止不得早于起始：合并「已有值 + 新值」后判断——这条不变量的唯一落点。
+    // 它不看调用方这次传了哪些字段，也不看 owner_id 是否存在：曾经这两处条件是
+    // 分开写的，于是「只带 event_date」的 PATCH 从两处都漏过去，最后由 SQL CHECK
+    // 兜底，用户拿到的是 500 加一个内部错误码。
+    const merged = {
+      event_date: values.event_date ?? current?.event_date,
+      due_date: values.due_date ?? current?.due_date,
+    };
+    if (merged.event_date && merged.due_date && merged.due_date < merged.event_date) {
       errors.due_date = '截止日期不得早于起始日期';
     }
 
@@ -129,7 +137,7 @@ export function createItems(store, colors) {
   }
 
   function createItem(account, input) {
-    const { values, errors } = normalizeItemInput(input, { requireAll: true });
+    const { values, errors } = normalizeItemInput(input, { requireAll: true, current: null });
 
     if (
       values.owner_id !== undefined &&
@@ -161,14 +169,10 @@ export function createItems(store, colors) {
     const current = requireItemAccess(account, id);
     if (current.archived_at) throw httpError(409, '已归档的事项不可修改');
 
-    const { values, errors } = normalizeItemInput(input, { requireAll: false });
+    const { values, errors } = normalizeItemInput(input, { requireAll: false, current });
 
     if (values.owner_id !== undefined && !capabilitiesOf(account).assignsOwner) {
       errors.owner_id = '只有 manager/admin 能修改 owner';
-    }
-    if (values.owner_id !== undefined) {
-      const merged = { event_date: current.event_date, due_date: current.due_date, ...values };
-      if (merged.due_date < merged.event_date) errors.due_date = '截止日期不得早于起始日期';
     }
     if (Object.keys(errors).length) throw httpError(400, '输入有误', { fields: errors });
 

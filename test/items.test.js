@@ -250,3 +250,67 @@ describe('deleteItem', () => {
     app.close();
   });
 });
+
+describe('日期不变量只有一处落点', () => {
+  const span = { event_date: '2026-09-01', due_date: '2026-09-10' };
+
+  test('只带 event_date 的部分更新不能绕过（这条路径曾经漏成 500）', () => {
+    const { app, admin } = freshWorld();
+    const { item } = app.items.createItem(admin, draft(span));
+
+    try {
+      app.items.updateItem(admin, item.id, { event_date: '2026-09-30', version: item.version });
+      assert.fail('应当抛错');
+    } catch (err) {
+      assert.equal(err.status, 400, '应当是字段错误，而不是存储层抛出的 500');
+      assert.equal(err.fields.due_date, '截止日期不得早于起始日期');
+    }
+    assert.equal(app.items.getItem(item.id).event_date, span.event_date, '不合法就不该落库');
+    app.close();
+  });
+
+  test('只带 due_date 的部分更新不能绕过', () => {
+    const { app, admin } = freshWorld();
+    const { item } = app.items.createItem(admin, draft(span));
+
+    try {
+      app.items.updateItem(admin, item.id, { due_date: '2026-08-01', version: item.version });
+      assert.fail('应当抛错');
+    } catch (err) {
+      assert.equal(err.status, 400);
+      assert.equal(err.fields.due_date, '截止日期不得早于起始日期');
+    }
+    app.close();
+  });
+
+  test('同时带两个日期也同样报错', () => {
+    const { app, admin } = freshWorld();
+    const { item } = app.items.createItem(admin, draft(span));
+
+    try {
+      app.items.updateItem(admin, item.id, {
+        event_date: '2026-09-20',
+        due_date: '2026-09-05',
+        version: item.version,
+      });
+      assert.fail('应当抛错');
+    } catch (err) {
+      assert.equal(err.status, 400);
+      assert.equal(err.fields.due_date, '截止日期不得早于起始日期');
+    }
+    app.close();
+  });
+
+  test('合法改动照常通过，version 自增', () => {
+    const { app, admin } = freshWorld();
+    const { item } = app.items.createItem(admin, draft(span));
+    const { item: updated } = app.items.updateItem(admin, item.id, {
+      event_date: '2026-09-05',
+      version: item.version,
+    });
+    assert.equal(updated.event_date, '2026-09-05');
+    assert.equal(updated.due_date, span.due_date, '没传的字段保持原值');
+    assert.equal(updated.version, item.version + 1);
+    app.close();
+  });
+});

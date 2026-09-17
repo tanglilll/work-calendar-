@@ -62,10 +62,13 @@ const server = createServer(async (req, res) => {
       return;
     }
     const status = Number(err && err.status) || 500;
+    // 带 status 的是我们自己抛的业务错误，可以如实回报；
+    // 其余（存储层、运行时）一律只说「服务器内部错误」，连错误码也不外泄。
+    const isAppError = Number.isInteger(err && err.status);
     if (status >= 500) console.error('[error]', err);
     sendError(res, status, status >= 500 ? '服务器内部错误' : err.message, {
-      ...(err && err.code ? { code: err.code } : {}),
-      ...(err && err.fields ? { fields: err.fields } : {}),
+      ...(isAppError && err.code ? { code: err.code } : {}),
+      ...(isAppError && err.fields ? { fields: err.fields } : {}),
     });
   }
 });
