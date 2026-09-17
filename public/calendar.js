@@ -2,7 +2,7 @@
  * 日历渲染：固定 42 格、周一起始、可跨月。
  * 跨多日事项从 event_date 到 due_date 逐格连续染色；同格内纵向均分铺满。
  */
-import { esc, toDateString, addDays } from './util.js';
+import { esc, toDateString, addDays, ownerLabel, ownerNames } from './util.js';
 
 export const GRID_SIZE = 42;
 /** 同格最多画 4 个色块；超过则画前 3 个 + 一条「+N」 */
@@ -61,10 +61,19 @@ export function assignItems(cells, items) {
 
 function blockHtml(item, palette) {
   const color = palette[item.color] || '#e5e7eb';
+  const tip = [
+    `${ownerNames(item)}: ${item.title}`,
+    `${item.event_date} → ${item.due_date}`,
+    item.tag || null,
+    item.progress ? `进展：${item.progress}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
   return `<button type="button" class="cell-item" data-item-id="${item.id}"
     style="background:${color}"
-    title="${esc(item.owner_name)}: ${esc(item.title)}（${esc(item.event_date)} → ${esc(item.due_date)}${item.tag ? ' · ' + esc(item.tag) : ''}）"
-  >${esc(item.owner_name)}: ${esc(item.title)}</button>`;
+    title="${esc(tip)}"
+  >${esc(ownerLabel(item))}: ${esc(item.title)}</button>`;
 }
 
 export function gridHtml(cells, palette) {

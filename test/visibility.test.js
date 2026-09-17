@@ -19,8 +19,10 @@ const MANAGER = { id: 9, role: 'manager' };
 const ADMIN = { id: 10, role: 'admin' };
 
 const VIEWER = (id, role) => ({ accountId: id, role });
-const OWN_ITEM = { id: 1, owner_id: 7 };
-const OTHERS_ITEM = { id: 2, owner_id: 8 };
+const OWN_ITEM = { id: 1, owners: [{ id: 7, username: 'self' }] };
+const OTHERS_ITEM = { id: 2, owners: [{ id: 8, username: 'other' }] };
+// 并列名单：7 和 8 都是成员，没有主次
+const SHARED_ITEM = { id: 3, owners: [{ id: 7, username: 'self' }, { id: 8, username: 'other' }] };
 
 describe('capabilitiesOf', () => {
   test('user 三者皆无', () => {
@@ -61,7 +63,12 @@ describe('canAccessItem', () => {
     assert.equal(canAccessItem(USER, OWN_ITEM), true);
   });
 
-  test('user 不能处置他人的事项', () => {
+  test('名单里有他一个就看得见，不论名单里有几个人', () => {
+    assert.equal(canAccessItem(USER, SHARED_ITEM), true, '并列意味着不是"主负责人"也算数');
+    assert.equal(canAccessItem(OTHER_USER, SHARED_ITEM), true);
+  });
+
+  test('user 不能处置自己不在名单上的事项', () => {
     assert.equal(canAccessItem(USER, OTHERS_ITEM), false);
     assert.equal(canAccessItem(OTHER_USER, OWN_ITEM), false);
   });
@@ -73,14 +80,19 @@ describe('canAccessItem', () => {
 });
 
 describe('ownerScope — 让 SQL 过滤与内存判据同源', () => {
-  test('user 带 owner 过滤与参数', () => {
-    assert.deepEqual(ownerScope(USER), { sql: ' AND i.owner_id = ?', params: [7] });
-  });
-
   test('manager / admin 不加过滤', () => {
     assert.deepEqual(ownerScope(MANAGER), { sql: '', params: [] });
     assert.deepEqual(ownerScope(ADMIN), { sql: '', params: [] });
   });
+
+  test('user 的过滤片段带上自己的账号 id', () => {
+    const scope = ownerScope(USER);
+    assert.deepEqual(scope.params, [7]);
+    assert.match(scope.sql, /item_owners/, '过滤落在成员表上');
+  });
+
+  // 片段本身是否真能筛出正确的集合，由 test/items.test.js 的行为测试证明——
+  // 在这里断言 SQL 字符串只会让任何一次重写都变红，却证明不了筛选对不对。
 });
 
 describe('canReceiveEvent — SSE 在服务端过滤', () => {

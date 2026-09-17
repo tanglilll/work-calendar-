@@ -2,6 +2,8 @@
  * 事项的读写与校验。可见性判据在 visibility.js，这里只调用它；
  * 路由层不自行拼 SQL、不自行比对角色。
  *
+ * owner 是一个名单（见 docs/adr/0002）：成员并列、无主次。
+ *
  * store 与 colors 由组合根注入 —— 这个 module 不再自己创建数据库连接。
  */
 import { LIMITS, isValidDateString, isTagAllowed, TAGS } from './config.js';
@@ -9,15 +11,39 @@ import { canAccessItem, capabilitiesOf, ownerScope } from './visibility.js';
 import { httpError } from './http.js';
 
 const ITEM_COLUMNS = `
-  i.id, i.owner_id, a.username AS owner_name, i.title,
-  i.event_date, i.due_date, i.tag, i.color,
-  i.version, i.archived_at, i.created_at, i.updated_at
+  i.id, i.title, i.event_date, i.due_date, i.tag, i.color,
+  i.version, i.archived_at, i.created_at, i.updated_at,
+  i.progress, i.progress_updated_at
 `;
 
-const FROM_ITEMS = 'FROM items i JOIN accounts a ON a.id = i.owner_id';
+const FROM_ITEMS = 'FROM items i';
 
 export function createItems(store, colors) {
   const { db, tx } = store;
+
+  /** 一次把一批事项的 owner 名单捞出来，避免逐条查询。 */
+  function withOwners(rows) {
+    if (!rows.length) return rows;
+    const marks = rows.map(() => '?').join(',');
+    const members = db
+      .prepare(
+        `SELECT m.item_id, a.id, a.username
+           FROM item_owners m JOIN accounts a ON a.id = m.account_id
+          WHERE m.item_id IN (${marks})
+          ORDER BY a.username ASC`,
+      )
+      .all(...rows.map((r) => r.id));
+
+    const byItem = new Map();
+    for (const m of members) {
+      if (!byItem.has(m.item_id)) byItem.set(m.item_id, []);
+      byItem.get(m.item_id).push({ id: m.id, username: m.username });
+    }
+    for (const row of rows) row.owners = byItem.get(row.id) ?? [];
+    return rows;
+  }
+
+  const ownerIdsOf = (item) => item.owners.map((o) => o.id);
 
   /**
    * 变更描述：领域层只说「发生了什么、影响谁」，怎么送达由适配层决定。
@@ -25,7 +51,7 @@ export function createItems(store, colors) {
    */
   const ownerChanged = (kind, item) => ({
     to: 'itemOwners',
-    ownerIds: [item.owner_id],
+    ownerIds: ownerIdsOf(item),
     kind,
     itemId: item.id,
   });
@@ -69,21 +95,38 @@ export function createItems(store, colors) {
       values.tag = null;
     }
 
-    if (input.owner_id !== undefined) {
-      const ownerId = Number(input.owner_id);
-      if (!Number.isInteger(ownerId) || ownerId <= 0) {
-        errors.owner_id = 'owner_id 必须是正整数';
-      } else if (!db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(ownerId)) {
-        errors.owner_id = '指定的 owner 不存在';
+    // 进展：一段自由文本，覆盖式更新，不保留历史（见 CONTEXT.md「进展」）
+    if (input.progress !== undefined) {
+      if (input.progress === null || input.progress === '') {
+        values.progress = null;
+      } else if (typeof input.progress !== 'string') {
+        errors.progress = '进展必须是文本';
       } else {
-        values.owner_id = ownerId;
+        const p = input.progress.trim();
+        if (p.length > LIMITS.PROGRESS_MAX) errors.progress = `进展最多 ${LIMITS.PROGRESS_MAX} 个字符`;
+        else values.progress = p || null;
+      }
+    } else if (requireAll) {
+      values.progress = null;
+    }
+
+    // owner 名单：必须是非空、去重、且账号都存在的 id 数组
+    if (input.owner_ids !== undefined) {
+      if (!Array.isArray(input.owner_ids) || input.owner_ids.length === 0) {
+        errors.owner_ids = 'owner 名单至少要有一个人';
+      } else {
+        const ids = [...new Set(input.owner_ids.map(Number))];
+        const exists = db.prepare('SELECT 1 FROM accounts WHERE id = ?');
+        const bad = ids.find((id) => !Number.isInteger(id) || id <= 0 || !exists.get(id));
+        if (bad !== undefined) errors.owner_ids = 'owner 名单里有不存在的账号';
+        else values.owner_ids = ids.sort((a, b) => a - b);
       }
     }
 
     // 截止不得早于起始：合并「已有值 + 新值」后判断——这条不变量的唯一落点。
-    // 它不看调用方这次传了哪些字段，也不看 owner_id 是否存在：曾经这两处条件是
-    // 分开写的，于是「只带 event_date」的 PATCH 从两处都漏过去，最后由 SQL CHECK
-    // 兜底，用户拿到的是 500 加一个内部错误码。
+    // 它不看调用方这次传了哪些字段，也不看名单有没有变：曾经这两处条件是分开写的，
+    // 于是「只带 event_date」的 PATCH 从两处都漏过去，最后由 SQL CHECK 兜底，
+    // 用户拿到的是 500 加一个内部错误码。
     const merged = {
       event_date: values.event_date ?? current?.event_date,
       due_date: values.due_date ?? current?.due_date,
@@ -95,7 +138,7 @@ export function createItems(store, colors) {
     return { values, errors };
   }
 
-  /** 可见范围：user 只及于自己，manager/admin 及于全部。 */
+  /** 可见范围：user 只及于自己是成员之一的事项，manager/admin 及于全部。 */
   function listItems(account, from, to) {
     const scope = ownerScope(account);
     const params = [...scope.params];
@@ -106,27 +149,30 @@ export function createItems(store, colors) {
       params.push(to, from);
     }
     sql += ' ORDER BY i.event_date ASC, i.title ASC';
-    return db.prepare(sql).all(...params);
+    return withOwners(db.prepare(sql).all(...params));
   }
 
   /** 归档视图：admin 专用，展示全部账号的已归档事项，只读。 */
   function listArchived(account) {
     if (!capabilitiesOf(account).managesAccounts) throw httpError(403, '需要 admin 权限');
-    return db
-      .prepare(
-        `SELECT ${ITEM_COLUMNS} ${FROM_ITEMS}
-          WHERE i.archived_at IS NOT NULL
-          ORDER BY i.archived_at DESC, i.id DESC
-          LIMIT ?`,
-      )
-      .all(LIMITS.ARCHIVE_PAGE_SIZE);
+    return withOwners(
+      db
+        .prepare(
+          `SELECT ${ITEM_COLUMNS} ${FROM_ITEMS}
+            WHERE i.archived_at IS NOT NULL
+            ORDER BY i.archived_at DESC, i.id DESC
+            LIMIT ?`,
+        )
+        .all(LIMITS.ARCHIVE_PAGE_SIZE),
+    );
   }
 
   function getItem(id) {
-    return db.prepare(`SELECT ${ITEM_COLUMNS} ${FROM_ITEMS} WHERE i.id = ?`).get(id);
+    const row = db.prepare(`SELECT ${ITEM_COLUMNS} ${FROM_ITEMS} WHERE i.id = ?`).get(id);
+    return row ? withOwners([row])[0] : undefined;
   }
 
-  /** 读一条事项并要求当前账号有权处置它（owner 本人，或 manager/admin）。 */
+  /** 读一条事项并要求当前账号有权处置它（名单成员，或 manager/admin）。 */
   function requireItemAccess(account, id) {
     const item = getItem(id);
     if (!item) throw httpError(404, '事项不存在');
@@ -136,30 +182,34 @@ export function createItems(store, colors) {
     return item;
   }
 
+  /** 把 owner 名单写进关联表（调用方负责事务）。 */
+  function writeOwners(itemId, ownerIds) {
+    db.prepare('DELETE FROM item_owners WHERE item_id = ?').run(itemId);
+    const insert = db.prepare('INSERT INTO item_owners (item_id, account_id) VALUES (?, ?)');
+    for (const accountId of ownerIds) insert.run(itemId, accountId);
+  }
+
   function createItem(account, input) {
     const { values, errors } = normalizeItemInput(input, { requireAll: true, current: null });
 
-    if (
-      values.owner_id !== undefined &&
-      !capabilitiesOf(account).assignsOwner &&
-      values.owner_id !== account.id
-    ) {
-      errors.owner_id = '只有 manager/admin 能把事项分配给他人';
+    const ownerIds = values.owner_ids ?? [account.id];
+    if (!capabilitiesOf(account).assignsOwner && !(ownerIds.length === 1 && ownerIds[0] === account.id)) {
+      errors.owner_ids = '只有 manager/admin 能把事项分配给他人';
     }
     if (Object.keys(errors).length) throw httpError(400, '输入有误', { fields: errors });
 
-    const ownerId = values.owner_id ?? account.id;
     const now = new Date().toISOString();
-
     const item = tx(() => {
       const color = colors.pickColor();
       const info = db
         .prepare(
-          `INSERT INTO items (owner_id, title, event_date, due_date, tag, color, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO items (title, event_date, due_date, tag, color, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(ownerId, values.title, values.event_date, values.due_date, values.tag, color, now, now);
-      return getItem(Number(info.lastInsertRowid));
+        .run(values.title, values.event_date, values.due_date, values.tag, color, now, now);
+      const id = Number(info.lastInsertRowid);
+      writeOwners(id, ownerIds);
+      return getItem(id);
     });
 
     return { item, changed: [ownerChanged('created', item)] };
@@ -170,24 +220,32 @@ export function createItems(store, colors) {
     if (current.archived_at) throw httpError(409, '已归档的事项不可修改');
 
     const { values, errors } = normalizeItemInput(input, { requireAll: false, current });
+    const nextOwnerIds = values.owner_ids ?? null;
+    delete values.owner_ids;
 
-    if (values.owner_id !== undefined && !capabilitiesOf(account).assignsOwner) {
-      errors.owner_id = '只有 manager/admin 能修改 owner';
+    if (nextOwnerIds && !capabilitiesOf(account).assignsOwner) {
+      errors.owner_ids = '只有 manager/admin 能直接改 owner 名单；要把别人加进来请用邀请';
     }
     if (Object.keys(errors).length) throw httpError(400, '输入有误', { fields: errors });
 
     const expectedVersion = Number(input.version);
     if (!Number.isInteger(expectedVersion)) throw httpError(400, '更新时必须带上 version');
 
-    const item = tx(() => {
+    const updated = tx(() => {
+      const now = new Date().toISOString();
       const sets = [];
       const params = [];
       for (const [key, value] of Object.entries(values)) {
         sets.push(`${key} = ?`);
         params.push(value);
       }
+      // 改写进展时顺手记下它是什么时候写的
+      if ('progress' in values) {
+        sets.push('progress_updated_at = ?');
+        params.push(now);
+      }
       sets.push('version = version + 1', 'updated_at = ?');
-      params.push(new Date().toISOString());
+      params.push(now);
       params.push(id, expectedVersion);
 
       const info = db
@@ -198,19 +256,27 @@ export function createItems(store, colors) {
         // 版本不符：说明期间有人改过这条事项
         throw httpError(409, '此事项已被他人修改，请刷新后重试', { code: 'VERSION_CONFLICT' });
       }
+      if (nextOwnerIds) writeOwners(id, nextOwnerIds);
       return getItem(id);
     });
 
-    // 归属易主时新旧 owner 的看板都要刷新——这件事只有这里知道
-    const changed =
-      current.owner_id !== item.owner_id
-        ? [
-            { to: 'itemOwners', ownerIds: [current.owner_id], kind: 'transferred-away', itemId: id },
-            { to: 'itemOwners', ownerIds: [item.owner_id], kind: 'transferred-in', itemId: id },
-          ]
-        : [ownerChanged('updated', item)];
+    const before = new Set(ownerIdsOf(current));
+    const after = new Set(ownerIdsOf(updated));
+    const removed = [...before].filter((x) => !after.has(x));
+    const added = [...after].filter((x) => !before.has(x));
+    const stayed = [...after].filter((x) => before.has(x));
 
-    return { item, changed };
+    // 名单变了要说清谁进了谁出了：只有这里知道这件事
+    const changed = [];
+    if (removed.length || added.length) {
+      if (removed.length) changed.push({ to: 'itemOwners', ownerIds: removed, kind: 'transferred-away', itemId: id });
+      if (added.length) changed.push({ to: 'itemOwners', ownerIds: added, kind: 'transferred-in', itemId: id });
+      if (stayed.length) changed.push({ to: 'itemOwners', ownerIds: stayed, kind: 'updated', itemId: id });
+    } else {
+      changed.push(ownerChanged('updated', updated));
+    }
+
+    return { item: updated, changed };
   }
 
   /** 归档（不可逆）。需要版本匹配，避免覆盖他人刚做的修改。 */
@@ -244,20 +310,67 @@ export function createItems(store, colors) {
     return { item, changed: [ownerChanged('deleted', item)] };
   }
 
-  /** 某账号名下未归档事项数（删账号前的转移检查用）。 */
-  function countActiveItems(ownerId) {
+  /**
+   * 某账号是**唯一** owner 且未归档的事项数——删账号前必须先把这些转走。
+   * 还有别人的事项不算：那种情况下删账号只是把它从名单里摘掉。
+   */
+  function countSoleOwnedActiveItems(accountId) {
     return db
-      .prepare('SELECT COUNT(*) AS n FROM items WHERE owner_id = ? AND archived_at IS NULL')
-      .get(ownerId).n;
+      .prepare(
+        `SELECT COUNT(*) AS n FROM items i
+          WHERE i.archived_at IS NULL
+            AND EXISTS (SELECT 1 FROM item_owners m WHERE m.item_id = i.id AND m.account_id = ?)
+            AND (SELECT COUNT(*) FROM item_owners m2 WHERE m2.item_id = i.id) = 1`,
+      )
+      .get(accountId).n;
   }
 
-  /** 把某账号名下全部事项（含已归档）转给另一个账号。 */
+  /** 某账号是唯一 owner 的已归档事项数（删账号时它们会一并消失）。 */
+  function countSoleOwnedArchivedItems(accountId) {
+    return db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM items i
+          WHERE i.archived_at IS NOT NULL
+            AND EXISTS (SELECT 1 FROM item_owners m WHERE m.item_id = i.id AND m.account_id = ?)
+            AND (SELECT COUNT(*) FROM item_owners m2 WHERE m2.item_id = i.id) = 1`,
+      )
+      .get(accountId).n;
+  }
+
+  /** 删掉某账号是唯一 owner 的全部事项（含已归档）。共享事项由外键级联摘除成员。 */
+  function deleteSoleOwnedItems(accountId) {
+    return db
+      .prepare(
+        `DELETE FROM items WHERE id IN (
+           SELECT i.id FROM items i
+            WHERE EXISTS (SELECT 1 FROM item_owners m WHERE m.item_id = i.id AND m.account_id = ?)
+              AND (SELECT COUNT(*) FROM item_owners m2 WHERE m2.item_id = i.id) = 1
+         )`,
+      )
+      .run(accountId).changes;
+  }
+
+  /**
+   * 把 fromOwnerId 从它参与的每条事项里换成 toOwnerId。
+   * 目标已经是成员时不会重复插入（INSERT OR IGNORE）。
+   */
   function transferAllItems(fromOwnerId, toOwnerId) {
+    const affected = db
+      .prepare('SELECT item_id FROM item_owners WHERE account_id = ?')
+      .all(fromOwnerId);
+
     return tx(() => {
-      const info = db
-        .prepare('UPDATE items SET owner_id = ?, version = version + 1, updated_at = ? WHERE owner_id = ?')
-        .run(toOwnerId, new Date().toISOString(), fromOwnerId);
-      return Number(info.changes);
+      const add = db.prepare('INSERT OR IGNORE INTO item_owners (item_id, account_id) VALUES (?, ?)');
+      const drop = db.prepare('DELETE FROM item_owners WHERE item_id = ? AND account_id = ?');
+      const touch = db.prepare('UPDATE items SET version = version + 1, updated_at = ? WHERE id = ?');
+      const now = new Date().toISOString();
+
+      for (const { item_id: itemId } of affected) {
+        add.run(itemId, toOwnerId);
+        drop.run(itemId, fromOwnerId);
+        touch.run(now, itemId);
+      }
+      return affected.length;
     });
   }
 
@@ -270,7 +383,9 @@ export function createItems(store, colors) {
     updateItem,
     archiveItem,
     deleteItem,
-    countActiveItems,
+    countSoleOwnedActiveItems,
+    countSoleOwnedArchivedItems,
+    deleteSoleOwnedItems,
     transferAllItems,
   };
 }

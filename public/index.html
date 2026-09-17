@@ -46,6 +46,7 @@
 
     <div class="topbar-right">
       <button type="button" id="btn-new" class="primary">+ 新建事项</button>
+      <button type="button" id="btn-invites" hidden>邀请<span id="invite-count" class="badge"></span></button>
       <button type="button" id="btn-admin" hidden>管理</button>
       <span id="whoami" class="whoami"></span>
       <button type="button" id="btn-logout">登出</button>
@@ -69,6 +70,7 @@
 </div>
 
 <dialog id="item-dialog" class="dialog"></dialog>
+<dialog id="invites-dialog" class="dialog"></dialog>
 <dialog id="admin-dialog" class="dialog dialog-wide"></dialog>
 
 <div id="toast" class="toast" hidden></div>

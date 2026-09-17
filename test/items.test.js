@@ -14,17 +14,19 @@ const STATUS = (fn, status) =>
     return true;
   });
 
-/** 一套最小世界：一个 admin、一个 user（走真实的申请→批准路径）。 */
+/** 一套最小世界：一个 admin、两个 user（走真实的申请→批准路径）。 */
 function freshWorld() {
   const app = createApp({ dbPath: ':memory:' });
   app.accounts.ensureBootstrapAdmin({ username: 'admin', password: 'password-1' });
   const admin = app.accounts.findAccountByUsername('admin');
 
-  app.accounts.submitRegistrationRequest({ username: 'zhao', password: 'password-2', note: '' });
-  const pending = app.accounts.listRequests().find((r) => r.username === 'zhao');
-  const { account: zhao } = app.accounts.approveRequest(pending.id);
+  const member = (username) => {
+    app.accounts.submitRegistrationRequest({ username, password: 'password-2', note: '' });
+    const pending = app.accounts.listRequests().find((r) => r.username === username);
+    return app.accounts.approveRequest(pending.id).account;
+  };
 
-  return { app, admin, zhao };
+  return { app, admin, zhao: member('zhao'), lin: member('lin') };
 }
 
 const draft = (over = {}) => ({
@@ -41,7 +43,7 @@ describe('createItem', () => {
     const { item, changed } = app.items.createItem(admin, draft({ title: '写周报' }));
 
     assert.equal(item.title, '写周报');
-    assert.equal(item.owner_id, admin.id);
+    assert.deepEqual(item.owners.map((o) => o.username), ['admin']);
     assert.equal(item.version, 1);
     assert.equal(item.archived_at, null);
     assert.deepEqual(changed, [
@@ -94,19 +96,19 @@ describe('createItem', () => {
   test('user 不能把事项分配给他人', () => {
     const { app, zhao, admin } = freshWorld();
     try {
-      app.items.createItem(zhao, draft({ owner_id: admin.id }));
+      app.items.createItem(zhao, draft({ owner_ids: [admin.id] }));
       assert.fail('应当抛错');
     } catch (err) {
-      assert.equal(err.fields.owner_id, '只有 manager/admin 能把事项分配给他人');
+      assert.equal(err.fields.owner_ids, '只有 manager/admin 能把事项分配给他人');
     }
     app.close();
   });
 
   test('admin 能替他人建事项，且归属就是那个人', () => {
     const { app, admin, zhao } = freshWorld();
-    const { item, changed } = app.items.createItem(admin, draft({ owner_id: zhao.id }));
-    assert.equal(item.owner_id, zhao.id);
-    assert.equal(changed[0].ownerIds[0], zhao.id);
+    const { item, changed } = app.items.createItem(admin, draft({ owner_ids: [zhao.id] }));
+    assert.deepEqual(item.owners.map((o) => o.id), [zhao.id]);
+    assert.deepEqual(changed[0].ownerIds, [zhao.id]);
     app.close();
   });
 });
@@ -194,11 +196,11 @@ describe('updateItem', () => {
     const { app, admin, zhao } = freshWorld();
     const { item } = app.items.createItem(admin, draft());
     const { item: moved, changed } = app.items.updateItem(admin, item.id, {
-      owner_id: zhao.id,
+      owner_ids: [zhao.id],
       version: item.version,
     });
 
-    assert.equal(moved.owner_id, zhao.id);
+    assert.deepEqual(moved.owners.map((o) => o.id), [zhao.id]);
     assert.deepEqual(changed, [
       { to: 'itemOwners', ownerIds: [admin.id], kind: 'transferred-away', itemId: item.id },
       { to: 'itemOwners', ownerIds: [zhao.id], kind: 'transferred-in', itemId: item.id },
@@ -311,6 +313,46 @@ describe('日期不变量只有一处落点', () => {
     assert.equal(updated.event_date, '2026-09-05');
     assert.equal(updated.due_date, span.due_date, '没传的字段保持原值');
     assert.equal(updated.version, item.version + 1);
+    app.close();
+  });
+});
+
+describe('多个 owner 并列', () => {
+  test('一条事项可以挂在多个账号名下，名单里每个人都能看见它', () => {
+    const { app, admin, zhao, lin } = freshWorld();
+    const { item } = app.items.createItem(admin, draft({ owner_ids: [zhao.id, lin.id] }));
+
+    assert.deepEqual(
+      item.owners.map((o) => o.username).sort(),
+      ['lin', 'zhao'],
+      'owner 名单是并列的：只有成员，没有主次',
+    );
+    assert.equal(app.items.listItems(zhao).length, 1, 'zhao 是成员之一，就该看得见');
+    assert.equal(app.items.listItems(lin).length, 1, 'lin 同理');
+    app.close();
+  });
+});
+
+describe('进展', () => {
+  test('名单里每个人都能填写，覆盖式更新并记下更新时间', () => {
+    const { app, admin, zhao } = freshWorld();
+    const { item } = app.items.createItem(admin, draft({ owner_ids: [admin.id, zhao.id] }));
+
+    assert.equal(item.progress, null, '默认没有进展');
+    assert.equal(item.progress_updated_at, null);
+
+    const { item: once } = app.items.updateItem(zhao, item.id, {
+      progress: '接口联调完成',
+      version: item.version,
+    });
+    assert.equal(once.progress, '接口联调完成');
+    assert.match(once.progress_updated_at, /^\d{4}-\d{2}-\d{2}T/, '记下更新时间');
+
+    const { item: twice } = app.items.updateItem(admin, item.id, {
+      progress: '已提测',
+      version: once.version,
+    });
+    assert.equal(twice.progress, '已提测', '覆盖式：只有一段进展，不保留历史');
     app.close();
   });
 });

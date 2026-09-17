@@ -116,19 +116,25 @@ export function createAccounts(store, items) {
     return { changed: [{ to: 'admins', kind: 'requests' }] };
   }
 
+  /**
+   * 账号列表。两个计数是「这个账号参与了多少条」（含与别人共享的），
+   * 用于管理面板展示；删除门槛看的是「它是唯一 owner 的那些」，见 deleteAccount。
+   */
   function listAccounts() {
     return db
       .prepare(
         `SELECT a.id, a.username, a.role, a.created_at,
-                (SELECT COUNT(*) FROM items i WHERE i.owner_id = a.id AND i.archived_at IS NULL) AS active_items,
-                (SELECT COUNT(*) FROM items i WHERE i.owner_id = a.id AND i.archived_at IS NOT NULL) AS archived_items
+                (SELECT COUNT(*) FROM items i JOIN item_owners m ON m.item_id = i.id
+                  WHERE m.account_id = a.id AND i.archived_at IS NULL) AS active_items,
+                (SELECT COUNT(*) FROM items i JOIN item_owners m ON m.item_id = i.id
+                  WHERE m.account_id = a.id AND i.archived_at IS NOT NULL) AS archived_items
            FROM accounts a
           ORDER BY a.created_at ASC, a.id ASC`,
       )
       .all();
   }
 
-  /** 供 manager/admin 分配事项时挑选 owner。只暴露 id 与用户名。 */
+  /** 供 manager/admin 在事项的 owner 名单里挑人。只暴露 id 与用户名。 */
   function listOwners() {
     return db.prepare('SELECT id, username FROM accounts ORDER BY username ASC').all();
   }
@@ -162,15 +168,16 @@ export function createAccounts(store, items) {
   }
 
   /**
-   * 删除账号。要求名下没有未归档事项（必须先转移）；
-   * 已归档事项随账号一并删除（它们的 owner 已不存在），数量在返回值里告知。
+   * 删除账号。要求「它是唯一 owner」的未归档事项为零（那些必须先转移）；
+   * 与别人共享的事项只是把它从 owner 名单里摘掉，事项本身留着。
+   * 已归档且只属于它的事项随账号一并删除，数量在返回值里告知。
    */
   function deleteAccount(actorId, targetId) {
     const target = db.prepare('SELECT id, username, role FROM accounts WHERE id = ?').get(targetId);
     if (!target) throw httpError(404, '账号不存在');
     if (target.id === actorId) throw httpError(409, '不能删除自己的账号');
 
-    const active = items.countActiveItems(target.id);
+    const active = items.countSoleOwnedActiveItems(target.id);
     if (active > 0) {
       throw httpError(409, `该账号名下还有 ${active} 条未归档事项，请先转移给他人`, {
         code: 'HAS_ACTIVE_ITEMS',
@@ -183,12 +190,10 @@ export function createAccounts(store, items) {
       if (admins <= 1) throw httpError(409, '系统里必须至少保留一个 admin');
     }
 
-    const archived = db
-      .prepare('SELECT COUNT(*) AS n FROM items WHERE owner_id = ? AND archived_at IS NOT NULL')
-      .get(target.id).n;
+    const archived = items.countSoleOwnedArchivedItems(target.id);
 
     const removed = tx(() => {
-      db.prepare('DELETE FROM items WHERE owner_id = ?').run(target.id);
+      items.deleteSoleOwnedItems(target.id);
       db.prepare('DELETE FROM sessions WHERE account_id = ?').run(target.id);
       db.prepare('DELETE FROM accounts WHERE id = ?').run(target.id);
       return { ...target, deletedArchivedItems: archived };

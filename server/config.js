@@ -27,6 +27,8 @@ export const TAGS = ['工作', '个人', '会议', '出差', '紧急'];
 
 export const LIMITS = {
   TITLE_MAX: 200,
+  /** 进展是一段自由文本，覆盖式更新 */
+  PROGRESS_MAX: 500,
   NOTE_MAX: 500,
   USERNAME_MIN: 3,
   USERNAME_MAX: 32,

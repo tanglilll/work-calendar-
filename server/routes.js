@@ -32,7 +32,7 @@ function requireAdmin(account) {
   return account;
 }
 
-export function createApi({ items, accounts, sessions }) {
+export function createApi({ items, accounts, sessions, invites }) {
   const checkLoginRate = createLoginRateLimiter();
 
   // ——————————————— 公开路由 ———————————————
@@ -44,6 +44,8 @@ export function createApi({ items, accounts, sessions }) {
       // 前端不自行比对角色字符串：要用到权限时读这两个字段
       roles: ROLES,
       capabilities: capabilitiesOf(account),
+      // 待接受邀请的条数：角标在首屏就要准
+      inviteCount: account ? invites.countFor(account) : 0,
       tags: TAGS,
       palette: PALETTE,
       today: todayLocal(),
@@ -109,7 +111,8 @@ export function createApi({ items, accounts, sessions }) {
   }
 
   function handleListOwners(res, me) {
-    requireManager(me);
+    // 只要求登录，不要求 manager：普通 user 要邀请别人一起做，就得能看见账号名；
+    // 而账号名本来就在色块与侧栏上人人可见，不是秘密。
     return sendJson(res, 200, { owners: accounts.listOwners() });
   }
 
@@ -130,6 +133,31 @@ export function createApi({ items, accounts, sessions }) {
     const { item, changed } = items.archiveItem(me, id, body.version);
     publish(changed);
     return sendJson(res, 200, { item });
+  }
+
+  // ——————————————— 邀请 ———————————————
+
+  function handleListInvites(res, me) {
+    return sendJson(res, 200, { items: invites.listFor(me), count: invites.countFor(me) });
+  }
+
+  async function handleCreateInvite(req, res, me, itemId) {
+    const body = await readJson(req);
+    const { invite, changed } = invites.invite(itemId, body.account_id, me);
+    publish(changed);
+    return sendJson(res, 201, { invite });
+  }
+
+  function handleAcceptInvite(res, me, inviteId) {
+    const { item, changed } = invites.accept(inviteId, me);
+    publish(changed);
+    return sendJson(res, 200, { item });
+  }
+
+  function handleRejectInvite(res, me, inviteId) {
+    const { changed } = invites.reject(inviteId, me);
+    publish(changed);
+    return sendJson(res, 200, { ok: true });
   }
 
   // ——————————————— admin 路由 ———————————————
@@ -215,6 +243,21 @@ export function createApi({ items, accounts, sessions }) {
 
     const archiveMatch = pathname.match(/^\/api\/items\/(\d+)\/archive$/);
     if (archiveMatch && method === 'POST') return handleArchiveItem(req, res, me, Number(archiveMatch[1]));
+
+    const itemInviteMatch = pathname.match(/^\/api\/items\/(\d+)\/invites$/);
+    if (itemInviteMatch && method === 'POST') {
+      return handleCreateInvite(req, res, me, Number(itemInviteMatch[1]));
+    }
+
+    if (method === 'GET' && pathname === '/api/invites') return handleListInvites(res, me);
+
+    const inviteMatch = pathname.match(/^\/api\/invites\/(\d+)\/(accept|reject)$/);
+    if (inviteMatch && method === 'POST') {
+      const inviteId = Number(inviteMatch[1]);
+      return inviteMatch[2] === 'accept'
+        ? handleAcceptInvite(res, me, inviteId)
+        : handleRejectInvite(res, me, inviteId);
+    }
 
     // ——— admin 路由 ———
 

@@ -6,14 +6,18 @@
  * - 「截止提醒」分两组展示：已逾期（due_date < 今天，红字高亮）与今天截止（due_date == 今天）。
  *   两组不重叠，其合计正是 due_date <= 今天 的全部事项。
  */
-import { esc } from './util.js';
+import { esc, ownerLabel } from './util.js';
 
 function row(item, palette, cls = '') {
   const color = palette[item.color] || '#e5e7eb';
   const tag = item.tag ? `<span class="tag-chip">${esc(item.tag)}</span>` : '';
+  const progress = item.progress
+    ? `<div class="row-progress" title="${esc(item.progress)}">进展：${esc(item.progress)}</div>`
+    : '';
   return `<div class="row ${cls}" data-item-id="${item.id}" style="border-left-color:${color}">
     <div class="row-title">${esc(item.title)}${tag}</div>
-    <div class="row-meta">${esc(item.owner_name)} · ${esc(item.event_date)} → ${esc(item.due_date)}</div>
+    <div class="row-meta">${esc(ownerLabel(item))} · ${esc(item.event_date)} → ${esc(item.due_date)}</div>
+    ${progress}
   </div>`;
 }
 

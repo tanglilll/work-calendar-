@@ -31,6 +31,22 @@ export function formatMonth(year, month) {
   return `${year} 年 ${month} 月`;
 }
 
+/**
+ * 归属文案。owner 是一个并列名单（见 docs/adr/0002）：
+ * 一个人写名字，多个人写「第一个 +N」——名字按用户名排序，取第一个。
+ */
+export function ownerLabel(item) {
+  const names = (item.owners ?? []).map((o) => o.username);
+  if (!names.length) return '（无 owner）';
+  return names.length === 1 ? names[0] : `${names[0]} +${names.length - 1}`;
+}
+
+/** 完整名单，给 tooltip 用。 */
+export function ownerNames(item) {
+  const names = (item.owners ?? []).map((o) => o.username);
+  return names.length ? names.join('、') : '（无 owner）';
+}
+
 let toastTimer = null;
 
 export function toast(message, kind = 'info') {

@@ -43,6 +43,12 @@ export const api = {
 
   owners: () => request('/api/owners'),
 
+  invites: () => request('/api/invites'),
+  invite: (itemId, accountId) =>
+    request(`/api/items/${itemId}/invites`, { method: 'POST', body: { account_id: accountId } }),
+  acceptInvite: (id) => request(`/api/invites/${id}/accept`, { method: 'POST' }),
+  rejectInvite: (id) => request(`/api/invites/${id}/reject`, { method: 'POST' }),
+
   adminRequests: () => request('/api/admin/requests'),
   approve: (id) => request(`/api/admin/requests/${id}/approve`, { method: 'POST' }),
   reject: (id) => request(`/api/admin/requests/${id}/reject`, { method: 'POST' }),

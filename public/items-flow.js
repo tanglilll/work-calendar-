@@ -53,3 +53,33 @@ export async function removeItem({ api, item, confirm }) {
     return { ok: false, close: false, message: err.message };
   }
 }
+
+/**
+ * 邀请他人一起做（需要对方接受）。
+ * 逐个人发；已经发过或已在名单里会被服务端拒绝，这里如实把第一条错误报出来。
+ */
+export async function invitePeople({ api, item, accountIds }) {
+  if (!item) return { ok: false, close: false, fields: { invite_ids: '先保存这条事项，才能邀请别人' } };
+  if (!accountIds.length) return { ok: false, close: false, fields: { invite_ids: '先勾选要邀请的人' } };
+
+  try {
+    for (const accountId of accountIds) await api.invite(item.id, accountId);
+    return { ok: true, close: false, toast: `已发出 ${accountIds.length} 条邀请，等对方接受` };
+  } catch (err) {
+    return { ok: false, close: false, message: err.message };
+  }
+}
+
+/** 回应邀请：接受就让这条事项出现在自己的看板上，拒绝就删掉它。 */
+export async function respondToInvite({ api, invite, accept }) {
+  try {
+    if (accept) {
+      await api.acceptInvite(invite.id);
+      return { ok: true, toast: '已接受，这条事项现在在你的看板上' };
+    }
+    await api.rejectInvite(invite.id);
+    return { ok: true, toast: '已拒绝，对方可以再邀' };
+  } catch (err) {
+    return { ok: false, message: err.message };
+  }
+}

@@ -35,7 +35,7 @@ export function capabilitiesOf(account) {
  */
 export function canAccessItem(account, item) {
   if (capabilitiesOf(account).seesAllItems) return true;
-  return item.owner_id === account.id;
+  return (item.owners ?? []).some((owner) => owner.id === account.id);
 }
 
 /**
@@ -44,7 +44,10 @@ export function canAccessItem(account, item) {
  */
 export function ownerScope(account) {
   if (capabilitiesOf(account).seesAllItems) return { sql: '', params: [] };
-  return { sql: ' AND i.owner_id = ?', params: [account.id] };
+  return {
+    sql: ' AND EXISTS (SELECT 1 FROM item_owners m WHERE m.item_id = i.id AND m.account_id = ?)',
+    params: [account.id],
+  };
 }
 
 /**

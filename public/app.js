@@ -5,6 +5,7 @@ import { buildGrid, assignItems, gridHtml } from './calendar.js';
 import { renderPanels } from './sidebar.js';
 import { openItemDialog } from './itemform.js';
 import { openAdminDialog } from './admin.js';
+import { openInvitesDialog } from './invites.js';
 
 const els = {
   auth: document.getElementById('auth'),
@@ -13,11 +14,14 @@ const els = {
   monthLabel: document.getElementById('month-label'),
   whoami: document.getElementById('whoami'),
   btnAdmin: document.getElementById('btn-admin'),
+  btnInvites: document.getElementById('btn-invites'),
+  inviteCount: document.getElementById('invite-count'),
   panelToday: document.getElementById('panel-today'),
   panelDue: document.getElementById('panel-due'),
   panelMulti: document.getElementById('panel-multi'),
   itemDialog: document.getElementById('item-dialog'),
   adminDialog: document.getElementById('admin-dialog'),
+  invitesDialog: document.getElementById('invites-dialog'),
 };
 
 const state = {
@@ -67,6 +71,9 @@ function render() {
 
   els.whoami.textContent = `${state.account.username}（${state.account.role}）`;
   els.btnAdmin.hidden = !state.capabilities.managesAccounts;
+  // 有待接受的邀请才显示入口，角标给出条数
+  els.btnInvites.hidden = state.inviteCount === 0;
+  els.inviteCount.textContent = state.inviteCount > 0 ? String(state.inviteCount) : '';
 }
 
 function shiftMonth(delta) {
@@ -90,15 +97,12 @@ function showAuth() {
 }
 
 async function loadOwners() {
-  if (!canAssign()) {
-    state.owners = state.account ? [{ id: state.account.id, username: state.account.username }] : [];
-    return;
-  }
   try {
     const { owners } = await api.owners();
     state.owners = owners;
   } catch {
-    state.owners = [{ id: state.account.id, username: state.account.username }];
+    // 拿不到账号列表时退到自己——至少不会把别人的名字弄丢
+    state.owners = state.account ? [{ id: state.account.id, username: state.account.username }] : [];
   }
 }
 
@@ -172,6 +176,15 @@ function openAdmin() {
     palette: state.palette,
     onDone: () => {
       refresh().catch((err) => toast(err.message, 'error'));
+    },
+  });
+}
+
+function openInvites() {
+  openInvitesDialog(els.invitesDialog, {
+    // 接受/拒绝都会改变看板内容与角标，重走一次 bootstrap 最省心
+    onDone: () => {
+      boot().catch((err) => toast(err.message, 'error'));
     },
   });
 }
@@ -250,6 +263,7 @@ function bindEvents() {
   });
 
   document.getElementById('btn-new').addEventListener('click', () => openItem(null));
+  document.getElementById('btn-invites').addEventListener('click', openInvites);
   document.getElementById('btn-admin').addEventListener('click', openAdmin);
   document.getElementById('btn-logout').addEventListener('click', onLogout);
 
@@ -274,6 +288,7 @@ async function boot() {
   state.palette = b.palette;
   state.capabilities = b.capabilities;
   state.roles = b.roles;
+  state.inviteCount = b.inviteCount ?? 0;
 
   const [y, m] = b.today.split('-').map(Number);
   state.anchor = { year: y, month: m };

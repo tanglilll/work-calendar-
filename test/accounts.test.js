@@ -156,7 +156,7 @@ describe('deleteAccount', () => {
       { to: 'admins', kind: 'accounts' },
     ]);
     // 转走之后 zhao 名下再无事项
-    assert.equal(app.items.countActiveItems(zhao.id), 0);
+    assert.equal(app.items.countSoleOwnedActiveItems(zhao.id), 0);
     assert.equal(app.items.listArchived(admin).length, 1);
     app.close();
   });
