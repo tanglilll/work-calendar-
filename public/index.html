@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>日程看板</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div id="auth" class="auth" hidden>
+  <div class="auth-card">
+    <h1>日程看板</h1>
+    <div class="tabs">
+      <button type="button" class="tab is-active" data-auth-tab="login">登录</button>
+      <button type="button" class="tab" data-auth-tab="apply">申请账号</button>
+    </div>
+
+    <form id="login-form" class="auth-form" autocomplete="on">
+      <label>用户名<input name="username" autocomplete="username" required></label>
+      <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit" class="primary">登录</button>
+      <p class="form-msg" data-msg data-kind="error"></p>
+    </form>
+
+    <form id="apply-form" class="auth-form" autocomplete="off" hidden>
+      <label>用户名<input name="username" required></label>
+      <label>密码<input name="password" type="password" required></label>
+      <label>备注<textarea name="note" rows="3" placeholder="说明你是谁，便于管理员核实"></textarea></label>
+      <button type="submit" class="primary">提交申请</button>
+      <p class="hint">提交后需管理员批准。批准之前不会创建账号，也无法登录。</p>
+      <p class="form-msg" data-msg data-kind="error"></p>
+    </form>
+  </div>
+</div>
+
+<div id="app" hidden>
+  <header class="topbar">
+    <div class="brand">日程看板</div>
+
+    <div class="month-nav">
+      <button type="button" data-nav="prev" title="上一月">‹</button>
+      <button type="button" data-nav="today">今天</button>
+      <button type="button" data-nav="next" title="下一月">›</button>
+      <span id="month-label" class="month-label"></span>
+    </div>
+
+    <div class="topbar-right">
+      <button type="button" id="btn-new" class="primary">+ 新建事项</button>
+      <button type="button" id="btn-admin" hidden>管理</button>
+      <span id="whoami" class="whoami"></span>
+      <button type="button" id="btn-logout">登出</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="calendar-wrap">
+      <div class="weekdays">
+        <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+      </div>
+      <div id="grid" class="grid"></div>
+    </section>
+
+    <aside class="sidebar">
+      <section class="panel" id="panel-today"></section>
+      <section class="panel" id="panel-due"></section>
+      <section class="panel" id="panel-multi"></section>
+    </aside>
+  </main>
+</div>
+
+<dialog id="item-dialog" class="dialog"></dialog>
+<dialog id="admin-dialog" class="dialog dialog-wide"></dialog>
+
+<div id="toast" class="toast" hidden></div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

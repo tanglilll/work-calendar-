@@ -1,0 +1,8 @@
+# 运行时数据（SQLite 数据库文件与 WAL 附属文件）
+data/
+
+# 万一有人误装依赖
+node_modules/
+
+# Reasonix 宿主在 workspace 里生成的会话数据
+.reasonix/

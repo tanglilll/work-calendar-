@@ -1,0 +1,13 @@
+{
+  "name": "rili",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "多人实时日程/任务看板（运行时零第三方依赖）",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node server/index.js"
+  }
+}

@@ -1,0 +1,298 @@
+/** 前端入口：登录态、状态管理、实时同步与事件委托。 */
+import { api } from './api.js';
+import { toast, formatMonth } from './util.js';
+import { buildGrid, assignItems, gridHtml } from './calendar.js';
+import { renderPanels } from './sidebar.js';
+import { openItemDialog } from './itemform.js';
+import { openAdminDialog } from './admin.js';
+
+const els = {
+  auth: document.getElementById('auth'),
+  app: document.getElementById('app'),
+  grid: document.getElementById('grid'),
+  monthLabel: document.getElementById('month-label'),
+  whoami: document.getElementById('whoami'),
+  btnAdmin: document.getElementById('btn-admin'),
+  panelToday: document.getElementById('panel-today'),
+  panelDue: document.getElementById('panel-due'),
+  panelMulti: document.getElementById('panel-multi'),
+  itemDialog: document.getElementById('item-dialog'),
+  adminDialog: document.getElementById('admin-dialog'),
+};
+
+const state = {
+  account: null,
+  tags: [],
+  palette: [],
+  today: '',
+  items: [],
+  owners: [],
+  anchor: { year: 0, month: 0 },
+  stream: null,
+};
+
+let refreshTimer = null;
+
+const canAssign = () => state.account && (state.account.role === 'manager' || state.account.role === 'admin');
+
+function scheduleRefresh() {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => {
+    refresh().catch((err) => toast(err.message, 'error'));
+  }, 120);
+}
+
+async function refresh() {
+  const { items } = await api.listItems();
+  state.items = items;
+  render();
+}
+
+function render() {
+  els.monthLabel.textContent = formatMonth(state.anchor.year, state.anchor.month);
+
+  const cells = buildGrid(state.anchor, state.today);
+  assignItems(cells, state.items);
+  els.grid.innerHTML = gridHtml(cells, state.palette);
+
+  renderPanels(
+    { today: els.panelToday, due: els.panelDue, multi: els.panelMulti },
+    state.items,
+    state.today,
+    state.palette,
+  );
+
+  els.whoami.textContent = `${state.account.username}（${state.account.role}）`;
+  els.btnAdmin.hidden = state.account.role !== 'admin';
+}
+
+function shiftMonth(delta) {
+  let { year, month } = state.anchor;
+  month += delta;
+  while (month < 1) {
+    month += 12;
+    year -= 1;
+  }
+  while (month > 12) {
+    month -= 12;
+    year += 1;
+  }
+  state.anchor = { year, month };
+  render();
+}
+
+function gotoToday() {
+  const [y, m] = state.today.split('-').map(Number);
+  state.anchor = { year: y, month: m };
+  render();
+}
+
+function showAuth() {
+  els.app.hidden = true;
+  els.auth.hidden = false;
+}
+
+async function loadOwners() {
+  if (!canAssign()) {
+    state.owners = state.account ? [{ id: state.account.id, username: state.account.username }] : [];
+    return;
+  }
+  try {
+    const { owners } = await api.owners();
+    state.owners = owners;
+  } catch {
+    state.owners = [{ id: state.account.id, username: state.account.username }];
+  }
+}
+
+function connectStream() {
+  if (state.stream) {
+    state.stream.close();
+    state.stream = null;
+  }
+  const es = new EventSource('/api/events');
+  // 事项事件已由服务端按可见性过滤，这里只做「重新拉取」
+  es.addEventListener('items', scheduleRefresh);
+  es.addEventListener('admin', scheduleRefresh);
+  es.addEventListener('self', () => {
+    // 自己的角色/账号被改动：重新走一次 bootstrap，权限变化立刻生效
+    boot().catch(() => {});
+  });
+  es.onerror = () => {
+    // 已登出时不再重连
+    if (!state.account) es.close();
+  };
+  state.stream = es;
+}
+
+async function enterApp() {
+  showAuthOff();
+  await loadOwners();
+  await refresh();
+  connectStream();
+}
+
+function showAuthOff() {
+  els.auth.hidden = true;
+  els.app.hidden = false;
+}
+
+function findItem(id) {
+  return state.items.find((i) => i.id === id) || null;
+}
+
+async function openItem(id, presetDate) {
+  let item = null;
+  if (id) {
+    item = findItem(id);
+    if (!item) {
+      // 可能刚被别人归档或删除
+      await refresh();
+      item = findItem(id);
+      if (!item) {
+        toast('该事项已不存在（可能已被归档或删除）', 'error');
+        return;
+      }
+    }
+  }
+
+  openItemDialog(els.itemDialog, {
+    item,
+    today: presetDate || state.today,
+    tags: state.tags,
+    owners: state.owners,
+    canAssign: canAssign(),
+    onDone: () => {
+      refresh().catch((err) => toast(err.message, 'error'));
+    },
+  });
+}
+
+function openAdmin() {
+  openAdminDialog(els.adminDialog, {
+    me: state.account,
+    palette: state.palette,
+    onDone: () => {
+      refresh().catch((err) => toast(err.message, 'error'));
+    },
+  });
+}
+
+async function onLogin(ev) {
+  ev.preventDefault();
+  const form = ev.currentTarget;
+  const msg = form.querySelector('[data-msg]');
+  msg.dataset.kind = 'error';
+  msg.textContent = '';
+  const fd = new FormData(form);
+  try {
+    const res = await api.login(String(fd.get('username') || ''), String(fd.get('password') || ''));
+    state.account = res.account;
+    form.reset();
+    await enterApp();
+  } catch (err) {
+    msg.textContent = err.message;
+  }
+}
+
+async function onApply(ev) {
+  ev.preventDefault();
+  const form = ev.currentTarget;
+  const msg = form.querySelector('[data-msg]');
+  msg.textContent = '';
+  const fd = new FormData(form);
+  try {
+    await api.apply({
+      username: String(fd.get('username') || ''),
+      password: String(fd.get('password') || ''),
+      note: String(fd.get('note') || ''),
+    });
+    form.reset();
+    msg.dataset.kind = 'ok';
+    msg.textContent = '申请已提交。管理员批准后才能登录。';
+  } catch (err) {
+    msg.dataset.kind = 'error';
+    msg.textContent = err.message;
+  }
+}
+
+async function onLogout() {
+  try {
+    await api.logout();
+  } catch {
+    /* 忽略：本地照样清状态 */
+  }
+  if (state.stream) {
+    state.stream.close();
+    state.stream = null;
+  }
+  state.account = null;
+  state.items = [];
+  showAuth();
+}
+
+function bindEvents() {
+  document.querySelectorAll('[data-auth-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const which = btn.dataset.authTab;
+      document.querySelectorAll('[data-auth-tab]').forEach((b) => b.classList.toggle('is-active', b === btn));
+      document.getElementById('login-form').hidden = which !== 'login';
+      document.getElementById('apply-form').hidden = which !== 'apply';
+    });
+  });
+
+  document.getElementById('login-form').addEventListener('submit', onLogin);
+  document.getElementById('apply-form').addEventListener('submit', onApply);
+
+  document.querySelector('.month-nav').addEventListener('click', (ev) => {
+    const nav = ev.target.closest('[data-nav]')?.dataset.nav;
+    if (nav === 'prev') shiftMonth(-1);
+    else if (nav === 'next') shiftMonth(1);
+    else if (nav === 'today') gotoToday();
+  });
+
+  document.getElementById('btn-new').addEventListener('click', () => openItem(null));
+  document.getElementById('btn-admin').addEventListener('click', openAdmin);
+  document.getElementById('btn-logout').addEventListener('click', onLogout);
+
+  // 日历与侧栏都是重绘出来的，事件用委托挂在 #app 上
+  els.app.addEventListener('click', (ev) => {
+    const addBtn = ev.target.closest('[data-add-date]');
+    if (addBtn) {
+      openItem(null, addBtn.dataset.addDate).catch((err) => toast(err.message, 'error'));
+      return;
+    }
+    const row = ev.target.closest('[data-item-id]');
+    if (row) {
+      openItem(Number(row.dataset.itemId)).catch((err) => toast(err.message, 'error'));
+    }
+  });
+}
+
+async function boot() {
+  const b = await api.bootstrap();
+  state.today = b.today;
+  state.tags = b.tags;
+  state.palette = b.palette;
+
+  const [y, m] = b.today.split('-').map(Number);
+  state.anchor = { year: y, month: m };
+
+  if (b.authenticated) {
+    state.account = b.account;
+    await enterApp();
+  } else {
+    if (state.stream) {
+      state.stream.close();
+      state.stream = null;
+    }
+    state.account = null;
+    showAuth();
+  }
+}
+
+bindEvents();
+boot().catch((err) => {
+  console.error(err);
+  toast(`初始化失败：${err.message}`, 'error');
+});
