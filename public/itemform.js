@@ -156,14 +156,19 @@ export function openItemDialog(dialog, ctx) {
     }
   }
 
-  dialog.addEventListener('click', (ev) => {
+  // 委托挂在每次重建的 head/foot 上，不能挂常驻的 <dialog> 元素上：
+  // 挂 dialog 会在每次打开对话框时叠加一个 click 监听器，于是点一次「保存」
+  // 会提交 N 次、点一次「标记完成」会弹 N 个确认框（N = 本次页面里开过多少次对话框）。
+  const onAction = (ev) => {
     const act = ev.target.closest('[data-act]')?.dataset.act;
     if (!act) return;
     if (act === 'cancel') dialog.close();
     else if (act === 'save') save();
     else if (act === 'archive') archive();
     else if (act === 'delete') remove();
-  });
+  };
+  dialog.querySelector('.dialog-head').addEventListener('click', onAction);
+  dialog.querySelector('.dialog-foot').addEventListener('click', onAction);
 
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
