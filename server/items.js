@@ -1,9 +1,9 @@
 /**
  * 事项的读写与校验。可见性判据在 visibility.js，这里只调用它；
  * 路由层不自行拼 SQL、不自行比对角色。
+ *
+ * store 与 colors 由组合根注入 —— 这个 module 不再自己创建数据库连接。
  */
-import { db, tx } from './db.js';
-import { pickColor } from './colors.js';
 import { LIMITS, isValidDateString, isTagAllowed, TAGS } from './config.js';
 import { canAccessItem, capabilitiesOf, ownerScope } from './visibility.js';
 import { httpError } from './http.js';
@@ -16,240 +16,257 @@ const ITEM_COLUMNS = `
 
 const FROM_ITEMS = 'FROM items i JOIN accounts a ON a.id = i.owner_id';
 
-/**
- * 变更描述：领域层只说「发生了什么、影响谁」，怎么送达由适配层决定。
- * 写操作一律返回 { item, changed }，routes 拿到后交给 sse.publish。
- */
-const ownerChanged = (kind, item) => ({
-  to: 'itemOwners',
-  ownerIds: [item.owner_id],
-  kind,
-  itemId: item.id,
-});
+export function createItems(store, colors) {
+  const { db, tx } = store;
 
-/**
- * 校验并归一化事项输入。requireAll=true 时所有必填字段都必须出现（新建）；
- * 否则只校验出现的字段（部分更新）。
- */
-export function normalizeItemInput(input, { requireAll }) {
-  const errors = {};
-  const values = {};
+  /**
+   * 变更描述：领域层只说「发生了什么、影响谁」，怎么送达由适配层决定。
+   * 写操作一律返回 { item, changed }，routes 拿到后交给 sse.publish。
+   */
+  const ownerChanged = (kind, item) => ({
+    to: 'itemOwners',
+    ownerIds: [item.owner_id],
+    kind,
+    itemId: item.id,
+  });
 
-  if (requireAll || input.title !== undefined) {
-    if (typeof input.title !== 'string') {
-      errors.title = '标题必须是文本';
-    } else {
-      const t = input.title.trim();
-      if (!t) errors.title = '标题不能为空';
-      else if (t.length > LIMITS.TITLE_MAX) errors.title = `标题最多 ${LIMITS.TITLE_MAX} 个字符`;
-      else values.title = t;
+  /**
+   * 校验并归一化事项输入。requireAll=true 时所有必填字段都必须出现（新建）；
+   * 否则只校验出现的字段（部分更新）。
+   */
+  function normalizeItemInput(input, { requireAll }) {
+    const errors = {};
+    const values = {};
+
+    if (requireAll || input.title !== undefined) {
+      if (typeof input.title !== 'string') {
+        errors.title = '标题必须是文本';
+      } else {
+        const t = input.title.trim();
+        if (!t) errors.title = '标题不能为空';
+        else if (t.length > LIMITS.TITLE_MAX) errors.title = `标题最多 ${LIMITS.TITLE_MAX} 个字符`;
+        else values.title = t;
+      }
     }
-  }
 
-  if (requireAll || input.event_date !== undefined) {
-    if (!isValidDateString(input.event_date)) errors.event_date = '起始日期格式须为 yyyy-mm-dd 的真实日期';
-    else values.event_date = input.event_date;
-  }
-
-  if (requireAll || input.due_date !== undefined) {
-    if (!isValidDateString(input.due_date)) errors.due_date = '截止日期格式须为 yyyy-mm-dd 的真实日期';
-    else values.due_date = input.due_date;
-  }
-
-  if (input.tag !== undefined) {
-    const raw = input.tag;
-    if (raw === null || raw === '') values.tag = null;
-    else if (!isTagAllowed(raw)) errors.tag = `标签必须取自白名单：${TAGS.join('、')}`;
-    else values.tag = raw;
-  } else if (requireAll) {
-    values.tag = null;
-  }
-
-  if (input.owner_id !== undefined) {
-    const ownerId = Number(input.owner_id);
-    if (!Number.isInteger(ownerId) || ownerId <= 0) {
-      errors.owner_id = 'owner_id 必须是正整数';
-    } else if (!db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(ownerId)) {
-      errors.owner_id = '指定的 owner 不存在';
-    } else {
-      values.owner_id = ownerId;
+    if (requireAll || input.event_date !== undefined) {
+      if (!isValidDateString(input.event_date)) errors.event_date = '起始日期格式须为 yyyy-mm-dd 的真实日期';
+      else values.event_date = input.event_date;
     }
+
+    if (requireAll || input.due_date !== undefined) {
+      if (!isValidDateString(input.due_date)) errors.due_date = '截止日期格式须为 yyyy-mm-dd 的真实日期';
+      else values.due_date = input.due_date;
+    }
+
+    if (input.tag !== undefined) {
+      const raw = input.tag;
+      if (raw === null || raw === '') values.tag = null;
+      else if (!isTagAllowed(raw)) errors.tag = `标签必须取自白名单：${TAGS.join('、')}`;
+      else values.tag = raw;
+    } else if (requireAll) {
+      values.tag = null;
+    }
+
+    if (input.owner_id !== undefined) {
+      const ownerId = Number(input.owner_id);
+      if (!Number.isInteger(ownerId) || ownerId <= 0) {
+        errors.owner_id = 'owner_id 必须是正整数';
+      } else if (!db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(ownerId)) {
+        errors.owner_id = '指定的 owner 不存在';
+      } else {
+        values.owner_id = ownerId;
+      }
+    }
+
+    // 截止不得早于起始：合并已有值与新值后判断
+    if (values.event_date && values.due_date && values.due_date < values.event_date) {
+      errors.due_date = '截止日期不得早于起始日期';
+    }
+
+    return { values, errors };
   }
 
-  // 截止不得早于起始：合并已有值与新值后判断
-  if (values.event_date && values.due_date && values.due_date < values.event_date) {
-    errors.due_date = '截止日期不得早于起始日期';
+  /** 可见范围：user 只及于自己，manager/admin 及于全部。 */
+  function listItems(account, from, to) {
+    const scope = ownerScope(account);
+    const params = [...scope.params];
+    let sql = `SELECT ${ITEM_COLUMNS} ${FROM_ITEMS} WHERE i.archived_at IS NULL${scope.sql}`;
+
+    if (from && to) {
+      sql += ' AND i.event_date <= ? AND i.due_date >= ?';
+      params.push(to, from);
+    }
+    sql += ' ORDER BY i.event_date ASC, i.title ASC';
+    return db.prepare(sql).all(...params);
   }
 
-  return { values, errors };
-}
-
-/** 可见范围：user 只及于自己，manager/admin 及于全部。 */
-export function listItems(account, from, to) {
-  const scope = ownerScope(account);
-  const params = [...scope.params];
-  let sql = `SELECT ${ITEM_COLUMNS} ${FROM_ITEMS} WHERE i.archived_at IS NULL${scope.sql}`;
-
-  if (from && to) {
-    sql += ' AND i.event_date <= ? AND i.due_date >= ?';
-    params.push(to, from);
-  }
-  sql += ' ORDER BY i.event_date ASC, i.title ASC';
-  return db.prepare(sql).all(...params);
-}
-
-/** 归档视图：admin 专用，展示全部账号的已归档事项，只读。 */
-export function listArchived(account) {
-  if (!capabilitiesOf(account).managesAccounts) throw httpError(403, '需要 admin 权限');
-  return db
-    .prepare(
-      `SELECT ${ITEM_COLUMNS} ${FROM_ITEMS}
-        WHERE i.archived_at IS NOT NULL
-        ORDER BY i.archived_at DESC, i.id DESC
-        LIMIT ?`,
-    )
-    .all(LIMITS.ARCHIVE_PAGE_SIZE);
-}
-
-export function getItem(id) {
-  return db.prepare(`SELECT ${ITEM_COLUMNS} ${FROM_ITEMS} WHERE i.id = ?`).get(id);
-}
-
-/** 读一条事项并要求当前账号有权处置它（owner 本人，或 manager/admin）。 */
-function requireItemAccess(account, id) {
-  const item = getItem(id);
-  if (!item) throw httpError(404, '事项不存在');
-  if (!canAccessItem(account, item)) {
-    throw httpError(403, '无权处置他人的事项');
-  }
-  return item;
-}
-
-export function createItem(account, input) {
-  const { values, errors } = normalizeItemInput(input, { requireAll: true });
-
-  if (
-    values.owner_id !== undefined &&
-    !capabilitiesOf(account).assignsOwner &&
-    values.owner_id !== account.id
-  ) {
-    errors.owner_id = '只有 manager/admin 能把事项分配给他人';
-  }
-  if (Object.keys(errors).length) throw httpError(400, '输入有误', { fields: errors });
-
-  const ownerId = values.owner_id ?? account.id;
-  const now = new Date().toISOString();
-
-  const item = tx(() => {
-    const color = pickColor();
-    const info = db
+  /** 归档视图：admin 专用，展示全部账号的已归档事项，只读。 */
+  function listArchived(account) {
+    if (!capabilitiesOf(account).managesAccounts) throw httpError(403, '需要 admin 权限');
+    return db
       .prepare(
-        `INSERT INTO items (owner_id, title, event_date, due_date, tag, color, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `SELECT ${ITEM_COLUMNS} ${FROM_ITEMS}
+          WHERE i.archived_at IS NOT NULL
+          ORDER BY i.archived_at DESC, i.id DESC
+          LIMIT ?`,
       )
-      .run(ownerId, values.title, values.event_date, values.due_date, values.tag, color, now, now);
-    return getItem(Number(info.lastInsertRowid));
-  });
-
-  return { item, changed: [ownerChanged('created', item)] };
-}
-
-export function updateItem(account, id, input) {
-  const current = requireItemAccess(account, id);
-  if (current.archived_at) throw httpError(409, '已归档的事项不可修改');
-
-  const { values, errors } = normalizeItemInput(input, { requireAll: false });
-
-  if (values.owner_id !== undefined && !capabilitiesOf(account).assignsOwner) {
-    errors.owner_id = '只有 manager/admin 能修改 owner';
+      .all(LIMITS.ARCHIVE_PAGE_SIZE);
   }
-  if (values.owner_id !== undefined) {
-    const merged = { event_date: current.event_date, due_date: current.due_date, ...values };
-    if (merged.due_date < merged.event_date) errors.due_date = '截止日期不得早于起始日期';
+
+  function getItem(id) {
+    return db.prepare(`SELECT ${ITEM_COLUMNS} ${FROM_ITEMS} WHERE i.id = ?`).get(id);
   }
-  if (Object.keys(errors).length) throw httpError(400, '输入有误', { fields: errors });
 
-  const expectedVersion = Number(input.version);
-  if (!Number.isInteger(expectedVersion)) throw httpError(400, '更新时必须带上 version');
-
-  const item = tx(() => {
-    const sets = [];
-    const params = [];
-    for (const [key, value] of Object.entries(values)) {
-      sets.push(`${key} = ?`);
-      params.push(value);
+  /** 读一条事项并要求当前账号有权处置它（owner 本人，或 manager/admin）。 */
+  function requireItemAccess(account, id) {
+    const item = getItem(id);
+    if (!item) throw httpError(404, '事项不存在');
+    if (!canAccessItem(account, item)) {
+      throw httpError(403, '无权处置他人的事项');
     }
-    sets.push('version = version + 1', 'updated_at = ?');
-    params.push(new Date().toISOString());
-    params.push(id, expectedVersion);
+    return item;
+  }
 
-    const info = db
-      .prepare(`UPDATE items SET ${sets.join(', ')} WHERE id = ? AND version = ?`)
-      .run(...params);
+  function createItem(account, input) {
+    const { values, errors } = normalizeItemInput(input, { requireAll: true });
 
-    if (info.changes === 0) {
-      // 版本不符：说明期间有人改过这条事项
-      throw httpError(409, '此事项已被他人修改，请刷新后重试', { code: 'VERSION_CONFLICT' });
+    if (
+      values.owner_id !== undefined &&
+      !capabilitiesOf(account).assignsOwner &&
+      values.owner_id !== account.id
+    ) {
+      errors.owner_id = '只有 manager/admin 能把事项分配给他人';
     }
-    return getItem(id);
-  });
+    if (Object.keys(errors).length) throw httpError(400, '输入有误', { fields: errors });
 
-  // 归属易主时新旧 owner 的看板都要刷新——这件事只有这里知道
-  const changed =
-    current.owner_id !== item.owner_id
-      ? [
-          { to: 'itemOwners', ownerIds: [current.owner_id], kind: 'transferred-away', itemId: id },
-          { to: 'itemOwners', ownerIds: [item.owner_id], kind: 'transferred-in', itemId: id },
-        ]
-      : [ownerChanged('updated', item)];
+    const ownerId = values.owner_id ?? account.id;
+    const now = new Date().toISOString();
 
-  return { item, changed };
-}
+    const item = tx(() => {
+      const color = colors.pickColor();
+      const info = db
+        .prepare(
+          `INSERT INTO items (owner_id, title, event_date, due_date, tag, color, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(ownerId, values.title, values.event_date, values.due_date, values.tag, color, now, now);
+      return getItem(Number(info.lastInsertRowid));
+    });
 
-/** 归档（不可逆）。需要版本匹配，避免覆盖他人刚做的修改。 */
-export function archiveItem(account, id, expectedVersion) {
-  const current = requireItemAccess(account, id);
-  if (current.archived_at) throw httpError(409, '该事项已经归档');
+    return { item, changed: [ownerChanged('created', item)] };
+  }
 
-  const version = Number(expectedVersion);
-  if (!Number.isInteger(version)) throw httpError(400, '归档时必须带上 version');
+  function updateItem(account, id, input) {
+    const current = requireItemAccess(account, id);
+    if (current.archived_at) throw httpError(409, '已归档的事项不可修改');
 
-  const item = tx(() => {
-    const info = db
-      .prepare(
-        `UPDATE items SET archived_at = ?, version = version + 1 WHERE id = ? AND version = ?`,
-      )
-      .run(new Date().toISOString(), id, version);
+    const { values, errors } = normalizeItemInput(input, { requireAll: false });
 
-    if (info.changes === 0) {
-      throw httpError(409, '此事项已被他人修改，请刷新后重试', { code: 'VERSION_CONFLICT' });
+    if (values.owner_id !== undefined && !capabilitiesOf(account).assignsOwner) {
+      errors.owner_id = '只有 manager/admin 能修改 owner';
     }
-    return getItem(id);
-  });
+    if (values.owner_id !== undefined) {
+      const merged = { event_date: current.event_date, due_date: current.due_date, ...values };
+      if (merged.due_date < merged.event_date) errors.due_date = '截止日期不得早于起始日期';
+    }
+    if (Object.keys(errors).length) throw httpError(400, '输入有误', { fields: errors });
 
-  return { item, changed: [ownerChanged('archived', item)] };
-}
+    const expectedVersion = Number(input.version);
+    if (!Number.isInteger(expectedVersion)) throw httpError(400, '更新时必须带上 version');
 
-export function deleteItem(account, id) {
-  const item = requireItemAccess(account, id);
-  const info = db.prepare('DELETE FROM items WHERE id = ?').run(id);
-  if (info.changes === 0) throw httpError(404, '事项不存在');
-  return { item, changed: [ownerChanged('deleted', item)] };
-}
+    const item = tx(() => {
+      const sets = [];
+      const params = [];
+      for (const [key, value] of Object.entries(values)) {
+        sets.push(`${key} = ?`);
+        params.push(value);
+      }
+      sets.push('version = version + 1', 'updated_at = ?');
+      params.push(new Date().toISOString());
+      params.push(id, expectedVersion);
 
-/** 某账号名下未归档事项数（删账号前的转移检查用）。 */
-export function countActiveItems(ownerId) {
-  return db
-    .prepare('SELECT COUNT(*) AS n FROM items WHERE owner_id = ? AND archived_at IS NULL')
-    .get(ownerId).n;
-}
+      const info = db
+        .prepare(`UPDATE items SET ${sets.join(', ')} WHERE id = ? AND version = ?`)
+        .run(...params);
 
-/** 把某账号名下全部事项（含已归档）转给另一个账号。 */
-export function transferAllItems(fromOwnerId, toOwnerId) {
-  return tx(() => {
-    const info = db
-      .prepare('UPDATE items SET owner_id = ?, version = version + 1, updated_at = ? WHERE owner_id = ?')
-      .run(toOwnerId, new Date().toISOString(), fromOwnerId);
-    return Number(info.changes);
-  });
+      if (info.changes === 0) {
+        // 版本不符：说明期间有人改过这条事项
+        throw httpError(409, '此事项已被他人修改，请刷新后重试', { code: 'VERSION_CONFLICT' });
+      }
+      return getItem(id);
+    });
+
+    // 归属易主时新旧 owner 的看板都要刷新——这件事只有这里知道
+    const changed =
+      current.owner_id !== item.owner_id
+        ? [
+            { to: 'itemOwners', ownerIds: [current.owner_id], kind: 'transferred-away', itemId: id },
+            { to: 'itemOwners', ownerIds: [item.owner_id], kind: 'transferred-in', itemId: id },
+          ]
+        : [ownerChanged('updated', item)];
+
+    return { item, changed };
+  }
+
+  /** 归档（不可逆）。需要版本匹配，避免覆盖他人刚做的修改。 */
+  function archiveItem(account, id, expectedVersion) {
+    const current = requireItemAccess(account, id);
+    if (current.archived_at) throw httpError(409, '该事项已经归档');
+
+    const version = Number(expectedVersion);
+    if (!Number.isInteger(version)) throw httpError(400, '归档时必须带上 version');
+
+    const item = tx(() => {
+      const info = db
+        .prepare(
+          `UPDATE items SET archived_at = ?, version = version + 1 WHERE id = ? AND version = ?`,
+        )
+        .run(new Date().toISOString(), id, version);
+
+      if (info.changes === 0) {
+        throw httpError(409, '此事项已被他人修改，请刷新后重试', { code: 'VERSION_CONFLICT' });
+      }
+      return getItem(id);
+    });
+
+    return { item, changed: [ownerChanged('archived', item)] };
+  }
+
+  function deleteItem(account, id) {
+    const item = requireItemAccess(account, id);
+    const info = db.prepare('DELETE FROM items WHERE id = ?').run(id);
+    if (info.changes === 0) throw httpError(404, '事项不存在');
+    return { item, changed: [ownerChanged('deleted', item)] };
+  }
+
+  /** 某账号名下未归档事项数（删账号前的转移检查用）。 */
+  function countActiveItems(ownerId) {
+    return db
+      .prepare('SELECT COUNT(*) AS n FROM items WHERE owner_id = ? AND archived_at IS NULL')
+      .get(ownerId).n;
+  }
+
+  /** 把某账号名下全部事项（含已归档）转给另一个账号。 */
+  function transferAllItems(fromOwnerId, toOwnerId) {
+    return tx(() => {
+      const info = db
+        .prepare('UPDATE items SET owner_id = ?, version = version + 1, updated_at = ? WHERE owner_id = ?')
+        .run(toOwnerId, new Date().toISOString(), fromOwnerId);
+      return Number(info.changes);
+    });
+  }
+
+  return {
+    normalizeItemInput,
+    listItems,
+    listArchived,
+    getItem,
+    createItem,
+    updateItem,
+    archiveItem,
+    deleteItem,
+    countActiveItems,
+    transferAllItems,
+  };
 }

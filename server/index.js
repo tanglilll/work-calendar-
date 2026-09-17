@@ -1,23 +1,26 @@
 /**
  * 服务端入口：一个 node:http 服务，/api/* 走 JSON 接口，其余走 public/ 静态文件。
+ *
+ * 这里是唯一读环境变量的地方：数据库路径、端口、初始 admin 都从这里传进
+ * 组合根与领域 module，它们自己不碰 process.env。
  */
 import { createServer } from 'node:http';
 import { networkInterfaces } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { handleApi } from './routes.js';
+import { createApp } from './app.js';
 import { sendError, serveStatic } from './http.js';
-import { ensureBootstrapAdmin } from './accounts.js';
-import { purgeExpiredSessions } from './auth.js';
 import { startHeartbeat } from './sse.js';
-import { DB_PATH } from './db.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(HERE, '..', 'public');
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
+const DB_PATH = process.env.RILI_DB || join(HERE, '..', 'data', 'rili.db');
+
+const app = createApp({ dbPath: DB_PATH });
 
 function localAddresses() {
   const out = [];
@@ -40,7 +43,7 @@ const server = createServer(async (req, res) => {
 
   try {
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
-      await handleApi(req, res, url);
+      await app.handleApi(req, res, url);
       return;
     }
 
@@ -72,12 +75,15 @@ server.requestTimeout = 0;
 server.headersTimeout = 60_000;
 server.keepAliveTimeout = 72_000;
 
-const bootstrap = ensureBootstrapAdmin();
-purgeExpiredSessions();
+const bootstrap = app.accounts.ensureBootstrapAdmin({
+  username: process.env.RILI_ADMIN_USER,
+  password: process.env.RILI_ADMIN_PASSWORD,
+});
+app.sessions.purgeExpiredSessions();
 startHeartbeat();
 
 // 每小时清理一次过期会话
-const purgeTimer = setInterval(purgeExpiredSessions, 3_600_000);
+const purgeTimer = setInterval(() => app.sessions.purgeExpiredSessions(), 3_600_000);
 purgeTimer.unref();
 
 server.listen(PORT, HOST, () => {

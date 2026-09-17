@@ -1,9 +1,12 @@
 /**
- * 密码哈希与会话。密码用 Node 内置 scrypt 加盐哈希存储，
- * 任何地方都不保存明文；注册申请表里存的也已经是哈希。
+ * 密码哈希与会话。
+ *
+ * 上半部分（哈希、Cookie 解析）是纯函数，不需要数据库；
+ * 下半部分的会话读写由 createSessions(store) 提供——store 由组合根注入。
+ * 密码用 Node 内置 scrypt 加盐哈希存储，任何地方都不保存明文；
+ * 注册申请表里存的也已经是哈希。
  */
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
-import { db } from './db.js';
 import { LIMITS } from './config.js';
 
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
@@ -35,61 +38,6 @@ export function verifyPassword(password, stored) {
   } catch {
     return false;
   }
-}
-
-/** 签发会话。返回 token 与变更描述——「该账号其它客户端要重新拉取」这件事在这里说。 */
-export function createSession(accountId) {
-  const token = randomBytes(32).toString('base64url');
-  const now = Date.now();
-  db.prepare('INSERT INTO sessions (token, account_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(
-    token,
-    accountId,
-    new Date(now).toISOString(),
-    new Date(now + LIMITS.SESSION_TTL_DAYS * DAY_MS).toISOString(),
-  );
-  return {
-    token,
-    changed: [{ to: 'accounts', accountIds: [accountId], kind: 'signed-in' }],
-  };
-}
-
-export function deleteSession(token) {
-  if (token) db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
-}
-
-/** 校验会话并滑动续期。返回当前账号，或 null。 */
-export function getSessionAccount(token) {
-  if (!token) return null;
-  const row = db
-    .prepare(
-      `SELECT s.expires_at, a.id, a.username, a.role
-         FROM sessions s JOIN accounts a ON a.id = s.account_id
-        WHERE s.token = ?`,
-    )
-    .get(token);
-  if (!row) return null;
-
-  const now = Date.now();
-  const expires = Date.parse(row.expires_at);
-  if (!(expires > now)) {
-    deleteSession(token);
-    return null;
-  }
-
-  // 滑动续期：剩余时间不足一半时才写库，避免每个请求都产生一次写入。
-  const ttl = LIMITS.SESSION_TTL_DAYS * DAY_MS;
-  if (expires - now < ttl / 2) {
-    db.prepare('UPDATE sessions SET expires_at = ? WHERE token = ?').run(
-      new Date(now + ttl).toISOString(),
-      token,
-    );
-  }
-
-  return { id: row.id, username: row.username, role: row.role, token };
-}
-
-export function purgeExpiredSessions() {
-  db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(new Date().toISOString());
 }
 
 export function parseCookies(req) {
@@ -127,4 +75,68 @@ export function sessionCookie(token) {
 
 export function clearSessionCookie() {
   return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+}
+
+/** 会话的读写。需要 store 的部分都在这里。 */
+export function createSessions(store) {
+  const { db } = store;
+
+  /** 签发会话。返回 token 与变更描述——「该账号其它客户端要重新拉取」在这里说。 */
+  function createSession(accountId) {
+    const token = randomBytes(32).toString('base64url');
+    const now = Date.now();
+    db.prepare(
+      'INSERT INTO sessions (token, account_id, created_at, expires_at) VALUES (?, ?, ?, ?)',
+    ).run(
+      token,
+      accountId,
+      new Date(now).toISOString(),
+      new Date(now + LIMITS.SESSION_TTL_DAYS * DAY_MS).toISOString(),
+    );
+    return {
+      token,
+      changed: [{ to: 'accounts', accountIds: [accountId], kind: 'signed-in' }],
+    };
+  }
+
+  function deleteSession(token) {
+    if (token) db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
+  }
+
+  /** 校验会话并滑动续期。返回当前账号，或 null。 */
+  function getSessionAccount(token) {
+    if (!token) return null;
+    const row = db
+      .prepare(
+        `SELECT s.expires_at, a.id, a.username, a.role
+           FROM sessions s JOIN accounts a ON a.id = s.account_id
+          WHERE s.token = ?`,
+      )
+      .get(token);
+    if (!row) return null;
+
+    const now = Date.now();
+    const expires = Date.parse(row.expires_at);
+    if (!(expires > now)) {
+      deleteSession(token);
+      return null;
+    }
+
+    // 滑动续期：剩余时间不足一半时才写库，避免每个请求都产生一次写入。
+    const ttl = LIMITS.SESSION_TTL_DAYS * DAY_MS;
+    if (expires - now < ttl / 2) {
+      db.prepare('UPDATE sessions SET expires_at = ? WHERE token = ?').run(
+        new Date(now + ttl).toISOString(),
+        token,
+      );
+    }
+
+    return { id: row.id, username: row.username, role: row.role, token };
+  }
+
+  function purgeExpiredSessions() {
+    db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(new Date().toISOString());
+  }
+
+  return { createSession, deleteSession, getSessionAccount, purgeExpiredSessions };
 }
