@@ -3,7 +3,8 @@
  */
 import { db, tx, usernameTaken } from './db.js';
 import { hashPassword, verifyPassword } from './auth.js';
-import { LIMITS, ROLES } from './config.js';
+import { LIMITS } from './config.js';
+import { ROLES } from './visibility.js';
 import { httpError } from './http.js';
 import { countActiveItems, transferAllItems } from './items.js';
 

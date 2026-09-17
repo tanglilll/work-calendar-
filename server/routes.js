@@ -14,7 +14,8 @@ import {
 import * as items from './items.js';
 import * as accounts from './accounts.js';
 import { addClient, broadcastItems, broadcastAdmin, broadcastToAccount } from './sse.js';
-import { TAGS, PALETTE, LIMITS, isManager, todayLocal } from './config.js';
+import { TAGS, PALETTE, LIMITS, todayLocal } from './config.js';
+import { capabilitiesOf, ROLES } from './visibility.js';
 
 function requireAccount(account) {
   if (!account) throw httpError(401, '请先登录');
@@ -23,13 +24,13 @@ function requireAccount(account) {
 
 function requireManager(account) {
   requireAccount(account);
-  if (!isManager(account.role)) throw httpError(403, '需要 manager 或 admin 权限');
+  if (!capabilitiesOf(account).seesAllItems) throw httpError(403, '需要 manager 或 admin 权限');
   return account;
 }
 
 function requireAdmin(account) {
   requireAccount(account);
-  if (account.role !== 'admin') throw httpError(403, '需要 admin 权限');
+  if (!capabilitiesOf(account).managesAccounts) throw httpError(403, '需要 admin 权限');
   return account;
 }
 
@@ -62,6 +63,9 @@ export async function handleApi(req, res, url) {
     return sendJson(res, 200, {
       authenticated: !!account,
       account: account ? { id: account.id, username: account.username, role: account.role } : null,
+      // 前端不自行比对角色字符串：要用到权限时读这两个字段
+      roles: ROLES,
+      capabilities: capabilitiesOf(account),
       tags: TAGS,
       palette: PALETTE,
       today: todayLocal(),
@@ -228,7 +232,7 @@ export async function handleApi(req, res, url) {
 
   if (method === 'GET' && pathname === '/api/admin/archive') {
     requireAdmin(me);
-    return sendJson(res, 200, { items: items.listArchived() });
+    return sendJson(res, 200, { items: items.listArchived(me) });
   }
 
   throw httpError(404, '接口不存在');

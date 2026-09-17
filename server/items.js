@@ -1,9 +1,11 @@
 /**
- * 事项的读写与校验。所有可见性判断都在这里，路由层不自行拼 SQL。
+ * 事项的读写与校验。可见性判据在 visibility.js，这里只调用它；
+ * 路由层不自行拼 SQL、不自行比对角色。
  */
 import { db, tx } from './db.js';
 import { pickColor } from './colors.js';
-import { LIMITS, isValidDateString, isTagAllowed, isManager, TAGS } from './config.js';
+import { LIMITS, isValidDateString, isTagAllowed, TAGS } from './config.js';
+import { canAccessItem, capabilitiesOf, ownerScope } from './visibility.js';
 import { httpError } from './http.js';
 
 const ITEM_COLUMNS = `
@@ -73,13 +75,10 @@ export function normalizeItemInput(input, { requireAll }) {
 
 /** 可见范围：user 只及于自己，manager/admin 及于全部。 */
 export function listItems(account, from, to) {
-  const params = [];
-  let sql = `SELECT ${ITEM_COLUMNS} ${FROM_ITEMS} WHERE i.archived_at IS NULL`;
+  const scope = ownerScope(account);
+  const params = [...scope.params];
+  let sql = `SELECT ${ITEM_COLUMNS} ${FROM_ITEMS} WHERE i.archived_at IS NULL${scope.sql}`;
 
-  if (!isManager(account.role)) {
-    sql += ' AND i.owner_id = ?';
-    params.push(account.id);
-  }
   if (from && to) {
     sql += ' AND i.event_date <= ? AND i.due_date >= ?';
     params.push(to, from);
@@ -89,7 +88,8 @@ export function listItems(account, from, to) {
 }
 
 /** 归档视图：admin 专用，展示全部账号的已归档事项，只读。 */
-export function listArchived() {
+export function listArchived(account) {
+  if (!capabilitiesOf(account).managesAccounts) throw httpError(403, '需要 admin 权限');
   return db
     .prepare(
       `SELECT ${ITEM_COLUMNS} ${FROM_ITEMS}
@@ -108,7 +108,7 @@ export function getItem(id) {
 function requireItemAccess(account, id) {
   const item = getItem(id);
   if (!item) throw httpError(404, '事项不存在');
-  if (!isManager(account.role) && item.owner_id !== account.id) {
+  if (!canAccessItem(account, item)) {
     throw httpError(403, '无权处置他人的事项');
   }
   return item;
@@ -117,7 +117,11 @@ function requireItemAccess(account, id) {
 export function createItem(account, input) {
   const { values, errors } = normalizeItemInput(input, { requireAll: true });
 
-  if (values.owner_id !== undefined && !isManager(account.role) && values.owner_id !== account.id) {
+  if (
+    values.owner_id !== undefined &&
+    !capabilitiesOf(account).assignsOwner &&
+    values.owner_id !== account.id
+  ) {
     errors.owner_id = '只有 manager/admin 能把事项分配给他人';
   }
   if (Object.keys(errors).length) throw httpError(400, '输入有误', { fields: errors });
@@ -143,7 +147,7 @@ export function updateItem(account, id, input) {
 
   const { values, errors } = normalizeItemInput(input, { requireAll: false });
 
-  if (values.owner_id !== undefined && !isManager(account.role)) {
+  if (values.owner_id !== undefined && !capabilitiesOf(account).assignsOwner) {
     errors.owner_id = '只有 manager/admin 能修改 owner';
   }
   if (values.owner_id !== undefined) {

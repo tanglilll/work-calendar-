@@ -2,10 +2,10 @@
  * SSE 广播中枢。
  *
  * 关键约束：可见性在【服务端】过滤，绝不全量广播。
- * - user 只会收到 ownerId === 自己 的事项事件；
- * - manager / admin 收到全部事项事件；
- * - 账号与注册申请相关的事件只发给 admin。
+ * 判据本身在 visibility.js —— 这里只负责把它用在推送上，
+ * 不自己比对角色字符串（否则 REST 与 SSE 会各写一份规则）。
  */
+import { canReceiveEvent } from './visibility.js';
 
 const clients = new Set();
 const HEARTBEAT_MS = 25_000;
@@ -16,14 +16,6 @@ function write(client, event, data) {
   } catch {
     // 连接已断，交给 close 事件清理
   }
-}
-
-function canReceive(client, event) {
-  if (event.scope === 'admin') return client.role === 'admin';
-
-  // scope === 'items'
-  if (client.role === 'manager' || client.role === 'admin') return true;
-  return event.ownerId === client.accountId;
 }
 
 export function addClient(res, account) {
@@ -49,7 +41,7 @@ export function addClient(res, account) {
 export function broadcastItems(ownerId, kind, itemId) {
   const event = { scope: 'items', ownerId: Number(ownerId), kind, itemId };
   for (const client of clients) {
-    if (canReceive(client, event)) write(client, 'items', event);
+    if (canReceiveEvent(client, event)) write(client, 'items', event);
   }
 }
 
@@ -57,7 +49,7 @@ export function broadcastItems(ownerId, kind, itemId) {
 export function broadcastAdmin(kind, payload = {}) {
   const event = { scope: 'admin', kind, ...payload };
   for (const client of clients) {
-    if (canReceive(client, event)) write(client, 'admin', event);
+    if (canReceiveEvent(client, event)) write(client, 'admin', event);
   }
 }
 

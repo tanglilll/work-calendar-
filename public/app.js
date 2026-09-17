@@ -22,6 +22,9 @@ const els = {
 
 const state = {
   account: null,
+  // 权限由服务端下发（bootstrap），前端不自行比对角色字符串
+  capabilities: { seesAllItems: false, assignsOwner: false, managesAccounts: false },
+  roles: [],
   tags: [],
   palette: [],
   today: '',
@@ -33,7 +36,7 @@ const state = {
 
 let refreshTimer = null;
 
-const canAssign = () => state.account && (state.account.role === 'manager' || state.account.role === 'admin');
+const canAssign = () => state.capabilities.assignsOwner;
 
 function scheduleRefresh() {
   clearTimeout(refreshTimer);
@@ -63,7 +66,7 @@ function render() {
   );
 
   els.whoami.textContent = `${state.account.username}（${state.account.role}）`;
-  els.btnAdmin.hidden = state.account.role !== 'admin';
+  els.btnAdmin.hidden = !state.capabilities.managesAccounts;
 }
 
 function shiftMonth(delta) {
@@ -165,6 +168,7 @@ async function openItem(id, presetDate) {
 function openAdmin() {
   openAdminDialog(els.adminDialog, {
     me: state.account,
+    roles: state.roles,
     palette: state.palette,
     onDone: () => {
       refresh().catch((err) => toast(err.message, 'error'));
@@ -222,6 +226,7 @@ async function onLogout() {
   }
   state.account = null;
   state.items = [];
+  state.capabilities = { seesAllItems: false, assignsOwner: false, managesAccounts: false };
   showAuth();
 }
 
@@ -267,6 +272,8 @@ async function boot() {
   state.today = b.today;
   state.tags = b.tags;
   state.palette = b.palette;
+  state.capabilities = b.capabilities;
+  state.roles = b.roles;
 
   const [y, m] = b.today.split('-').map(Number);
   state.anchor = { year: y, month: m };

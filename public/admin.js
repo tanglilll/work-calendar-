@@ -2,10 +2,8 @@
 import { api } from './api.js';
 import { esc, toast } from './util.js';
 
-const ROLE_LABEL = { user: 'user', manager: 'manager', admin: 'admin' };
-
 export function openAdminDialog(dialog, ctx) {
-  const { me, palette, onDone } = ctx;
+  const { me, palette, roles, onDone } = ctx;
   if (dialog.open) dialog.close();
   let tab = 'requests';
 
@@ -69,11 +67,11 @@ export function openAdminDialog(dialog, ctx) {
         .map(
           (a) => `<tr>
             <td>${esc(a.username)}${a.id === me.id ? ' <span class="pill">自己</span>' : ''}</td>
-            <td><span class="pill ${esc(a.role)}">${esc(ROLE_LABEL[a.role] || a.role)}</span></td>
+            <td><span class="pill ${esc(a.role)}">${esc(a.role)}</span></td>
             <td>${a.active_items}</td>
             <td>${a.archived_items}</td>
             <td><div class="inline-actions">
-              ${['user', 'manager', 'admin']
+              ${roles
                 .filter((r) => r !== a.role)
                 .map((r) => `<button type="button" data-role="${r}" data-id="${a.id}">改为 ${r}</button>`)
                 .join('')}

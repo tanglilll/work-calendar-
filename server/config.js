@@ -1,9 +1,7 @@
 /**
  * 全局常量与纯工具函数。这里不放任何 I/O 或状态。
+ * 角色词表与「谁能看见什么」的规则在 visibility.js，不在这里。
  */
-
-/** 角色，逐级包含。管理器 = manager + admin。 */
-export const ROLES = ['user', 'manager', 'admin'];
 
 /**
  * 12 色调色板。色相每 30° 一档，亮度统一在 70%–79%，
@@ -74,10 +72,6 @@ export function addDays(dateString, n) {
   const d = parseDateString(dateString);
   d.setDate(d.getDate() + n);
   return toDateString(d);
-}
-
-export function isManager(role) {
-  return role === 'manager' || role === 'admin';
 }
 
 export function isTagAllowed(tag) {
