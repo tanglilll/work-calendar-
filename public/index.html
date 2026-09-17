@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>日程看板</title>
+<title>工作日历</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 
 <div id="auth" class="auth" hidden>
   <div class="auth-card">
-    <h1>日程看板</h1>
+    <h1>工作日历</h1>
     <div class="tabs">
       <button type="button" class="tab is-active" data-auth-tab="login">登录</button>
       <button type="button" class="tab" data-auth-tab="apply">申请账号</button>
@@ -36,13 +36,12 @@
 
 <div id="app" hidden>
   <header class="topbar">
-    <div class="brand">日程看板</div>
+    <div class="brand">工作日历</div>
 
     <div class="month-nav">
       <button type="button" data-nav="prev" title="上一月">‹</button>
-      <button type="button" data-nav="today">今天</button>
-      <button type="button" data-nav="next" title="下一月">›</button>
       <span id="month-label" class="month-label"></span>
+      <button type="button" data-nav="next" title="下一月">›</button>
     </div>
 
     <div class="topbar-right">

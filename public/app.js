@@ -81,12 +81,6 @@ function shiftMonth(delta) {
   render();
 }
 
-function gotoToday() {
-  const [y, m] = state.today.split('-').map(Number);
-  state.anchor = { year: y, month: m };
-  render();
-}
-
 function showAuth() {
   els.app.hidden = true;
   els.auth.hidden = false;
@@ -248,7 +242,6 @@ function bindEvents() {
     const nav = ev.target.closest('[data-nav]')?.dataset.nav;
     if (nav === 'prev') shiftMonth(-1);
     else if (nav === 'next') shiftMonth(1);
-    else if (nav === 'today') gotoToday();
   });
 
   document.getElementById('btn-new').addEventListener('click', () => openItem(null));
