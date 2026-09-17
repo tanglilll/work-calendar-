@@ -38,7 +38,7 @@ export const LIMITS = {
   ARCHIVE_PAGE_SIZE: 200,
 };
 
-export const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** 判断 yyyy-mm-dd 是否为真实存在的日历日（2026-02-30 不合法）。 */
 export function isValidDateString(s) {
@@ -54,24 +54,12 @@ export function todayLocal() {
   return toDateString(new Date());
 }
 
-/** 把 Date 按本地时区格式化为 yyyy-mm-dd。 */
-export function toDateString(d) {
+/** 把 Date 按本地时区格式化为 yyyy-mm-dd。仅本模块内部使用。 */
+function toDateString(d) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
-}
-
-/** yyyy-mm-dd -> 本地零点的 Date。 */
-export function parseDateString(s) {
-  const [y, m, d] = s.split('-').map(Number);
-  return new Date(y, m - 1, d);
-}
-
-export function addDays(dateString, n) {
-  const d = parseDateString(dateString);
-  d.setDate(d.getDate() + n);
-  return toDateString(d);
 }
 
 export function isTagAllowed(tag) {

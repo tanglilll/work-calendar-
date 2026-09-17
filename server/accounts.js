@@ -245,8 +245,6 @@ export function createAccounts(store, items) {
   }
 
   return {
-    normalizeUsername,
-    validatePassword,
     submitRegistrationRequest,
     listRequests,
     approveRequest,

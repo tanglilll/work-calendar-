@@ -82,10 +82,6 @@ export function publish(changes = []) {
   }
 }
 
-export function clientCount() {
-  return clients.size;
-}
-
 export function startHeartbeat() {
   const timer = setInterval(() => {
     for (const client of clients) {

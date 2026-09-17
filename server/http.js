@@ -32,15 +32,6 @@ export function sendError(res, status, message, extra = {}) {
   sendJson(res, status, { error: { message, ...extra } });
 }
 
-export function sendText(res, status, text, contentType = 'text/plain; charset=utf-8', headers = {}) {
-  res.writeHead(status, {
-    'Content-Type': contentType,
-    'Content-Length': Buffer.byteLength(text),
-    ...headers,
-  });
-  res.end(text);
-}
-
 /**
  * 读取并解析 JSON 请求体。超过 limit 字节或不是合法 JSON 时抛错（带 status）。
  */
