@@ -1,6 +1,8 @@
-/** 新建 / 编辑事项的对话框。 */
+/** 新建 / 编辑事项的对话框。流程决策在 items-flow.js，这里只负责呈现与绑定。 */
 import { api } from './api.js';
 import { esc, setFieldErrors, toast } from './util.js';
+import { bindDialogForThisOpen } from './dialog.js';
+import { archiveItem, removeItem, saveItem } from './items-flow.js';
 
 export function openItemDialog(dialog, ctx) {
   const { item, today, tags, owners, canAssign, onDone } = ctx;
@@ -96,43 +98,16 @@ export function openItemDialog(dialog, ctx) {
     return payload;
   }
 
-  async function save() {
+  /** 执行一个流程决策，并按它的结果决定怎么呈现。 */
+  async function run(action) {
     setFieldErrors(form, null);
     busy(true);
     try {
-      if (editing) {
-        await api.updateItem(item.id, { ...collect(), version: item.version });
-      } else {
-        await api.createItem(collect());
-      }
-      dialog.close();
-      onDone();
-    } catch (err) {
-      if (err.fields) setFieldErrors(form, err.fields);
-      else if (err.status === 409) {
-        toast(err.message, 'error');
-        dialog.close();
-        onDone();
-      } else {
-        toast(err.message, 'error');
-      }
-    } finally {
-      busy(false);
-    }
-  }
-
-  async function archive() {
-    // 归档不可逆，先二次确认
-    if (!confirm(`确认把「${item.title}」标记为完成？\n\n完成后该事项会从日历和所有面板消失，且无法撤销。`)) return;
-    busy(true);
-    try {
-      await api.archiveItem(item.id, item.version);
-      dialog.close();
-      onDone();
-      toast('已标记完成（已归档）');
-    } catch (err) {
-      toast(err.message, 'error');
-      if (err.status === 409) {
+      const result = await action();
+      if (result.fields) setFieldErrors(form, result.fields);
+      if (result.message) toast(result.message, 'error');
+      if (result.toast) toast(result.toast);
+      if (result.close) {
         dialog.close();
         onDone();
       }
@@ -141,38 +116,27 @@ export function openItemDialog(dialog, ctx) {
     }
   }
 
-  async function remove() {
-    if (!confirm(`确认删除「${item.title}」？\n\n删除是物理移除，与「标记完成」不同，记录不会保留。`)) return;
-    busy(true);
-    try {
-      await api.deleteItem(item.id);
+  const onAction = (act) => {
+    if (act === 'cancel') {
       dialog.close();
-      onDone();
-      toast('已删除');
-    } catch (err) {
-      toast(err.message, 'error');
-    } finally {
-      busy(false);
+      return undefined;
     }
-  }
-
-  // 委托挂在每次重建的 head/foot 上，不能挂常驻的 <dialog> 元素上：
-  // 挂 dialog 会在每次打开对话框时叠加一个 click 监听器，于是点一次「保存」
-  // 会提交 N 次、点一次「标记完成」会弹 N 个确认框（N = 本次页面里开过多少次对话框）。
-  const onAction = (ev) => {
-    const act = ev.target.closest('[data-act]')?.dataset.act;
-    if (!act) return;
-    if (act === 'cancel') dialog.close();
-    else if (act === 'save') save();
-    else if (act === 'archive') archive();
-    else if (act === 'delete') remove();
+    if (act === 'save') return run(() => saveItem({ api, item, payload: collect() }));
+    if (act === 'archive') return run(() => archiveItem({ api, item, confirm }));
+    if (act === 'delete') return run(() => removeItem({ api, item, confirm }));
+    return undefined;
   };
-  dialog.querySelector('.dialog-head').addEventListener('click', onAction);
-  dialog.querySelector('.dialog-foot').addEventListener('click', onAction);
 
-  form.addEventListener('submit', (ev) => {
-    ev.preventDefault();
-    save();
+  // 监听器按「这一次打开」注册，下次打开会整体解除——见 dialog.js
+  bindDialogForThisOpen(dialog, {
+    click: (ev) => {
+      const act = ev.target.closest('[data-act]')?.dataset.act;
+      if (act) onAction(act);
+    },
+    submit: (ev) => {
+      ev.preventDefault();
+      run(() => saveItem({ api, item, payload: collect() }));
+    },
   });
 
   dialog.showModal();

@@ -1,6 +1,7 @@
 /** admin 管理面板：待批准申请 / 账号管理 / 归档（只读）。 */
 import { api } from './api.js';
 import { esc, toast } from './util.js';
+import { bindDialogForThisOpen } from './dialog.js';
 
 export function openAdminDialog(dialog, ctx) {
   const { me, palette, roles, onDone } = ctx;
@@ -107,8 +108,8 @@ export function openAdminDialog(dialog, ctx) {
       <p class="hint">归档是只读的：这里只能查看，不能恢复为未完成。归档不可逆是刻意的设计，见 ADR 相关的设计记录。</p>`;
   }
 
-  // 同 itemform.js：委托必须挂在每次重建的容器上，挂常驻的 <dialog> 会叠加监听器，
-  // 导致点一次「批准」执行 N 次（N = 本次页面里开过多少次管理面板）。
+  // 「哪一种操作该做什么」都在这里；监听器由 bindDialogForThisOpen 按次注册，
+  // 因此这个函数每次打开只注册一组，不会累积。
   const onAction = async (ev) => {
     const el = ev.target.closest('button');
     if (!el) return;
@@ -150,9 +151,8 @@ export function openAdminDialog(dialog, ctx) {
       if (err.status === 409 || err.status === 400) await render();
     }
   };
-  dialog.querySelector('.dialog-head').addEventListener('click', onAction);
-  dialog.querySelector('.admin-tabs').addEventListener('click', onAction);
-  body.addEventListener('click', onAction);
+  // 同 itemform.js：监听器按「这一次打开」注册，下次打开整体解除
+  bindDialogForThisOpen(dialog, { click: onAction });
 
   async function doTransfer(fromId) {
     const { accounts } = await api.adminAccounts();
