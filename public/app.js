@@ -1,7 +1,8 @@
 /** 前端入口：登录态、状态管理、实时同步与事件委托。 */
 import { api } from './api.js';
 import { toast, formatMonth } from './util.js';
-import { buildGrid, assignItems, gridHtml } from './calendar.js';
+import { buildGrid, assignItems } from './calendar.js';
+import { renderCalendar, mountSwitcher } from './prototype-calendar-styles.js';
 import { renderPanels } from './sidebar.js';
 import { openItemDialog } from './itemform.js';
 import { openAdminDialog } from './admin.js';
@@ -53,7 +54,14 @@ function render() {
 
   const cells = buildGrid(state.anchor, state.today);
   assignItems(cells, state.items);
-  els.grid.innerHTML = gridHtml(cells, state.palette);
+  // PROTOTYPE：日历渲染交给变体模块（?variant=A|B|C|D）
+  renderCalendar({
+    cells,
+    items: state.items,
+    palette: state.palette,
+    today: state.today,
+    anchor: state.anchor,
+  });
 
   renderPanels(
     { today: els.panelToday, due: els.panelDue, multi: els.panelMulti },
@@ -292,6 +300,12 @@ async function boot() {
 }
 
 bindEvents();
+// PROTOTYPE：底部浮动切换栏，切换后重绘日历
+mountSwitcher({
+  onChange: () => {
+    if (state.today) render();
+  },
+});
 boot().catch((err) => {
   console.error(err);
   toast(`初始化失败：${err.message}`, 'error');
