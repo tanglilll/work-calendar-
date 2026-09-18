@@ -6,7 +6,7 @@
 
 ## 运行
 
-需要 **Node 24+**（用到内置的 `node:sqlite`）。
+需要 **Node 24.2+**（用到内置的 `node:sqlite`，以及入口守卫用的 `import.meta.main`——它 Added in v24.2.0）。
 
 ```bash
 # 首次启动：账号表为空时必须指定初始 admin，否则没人能批准注册申请
@@ -89,7 +89,7 @@ server/
   config.js     常量与纯工具
 public/
   index.html    页面骨架（登录/申请 + 主界面 + 三个 dialog）
-  app.js        状态、实时同步、事件委托
+  app.js        状态与重拉声明表（事件 → 要重拉的字段）、实时同步、事件委托
   calendar.js   42 格生成与染色（纯函数）
   sidebar.js    三个聚合面板（纯函数）
   itemform.js   新建/编辑对话框（呈现与绑定）
@@ -99,6 +99,7 @@ public/
   admin.js      管理模式面板
   api.js        接口封装
   session.js    会话失效判据（只有 401）与收尾处理器注册
+  contracts.js  前端交互契约（动作词、开框仪式、结果呈现、公开端点豁免）
   util.js       转义、日期工具、归属文案、toast
 ```
 
