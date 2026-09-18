@@ -4,7 +4,7 @@
 
 **Blocked by:** 01（新增的变更要基于 `server/changes.js` 的构造能力）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 ## 现状（已实测）
 
@@ -84,3 +84,11 @@ $ grep -n "from './" server/items.js
 静态判据（测试里那条）断言 `items.js` 源码不含 `from './invites.js'`，并断言组合根确实接上了 `createPendingInviteesOf(`；`grep` 复核：`server/` 里出现 `invites` 的 import 只有组合根与 `invites.js` 自己。
 
 **全量套件**：`npm test` → `tests 293 / suites 80 / pass 293 / fail 0`（基线 289 + 本票 4 条）。
+
+## 主 agent 核对（2026-09-18）
+
+- **先说过程**：这个 agent **卡住没汇报**（无活动 600 秒超时），但工作在卡住前已完成并提交（`22d2791`）、票的结论与证据也写好了——只有 `Status` 行与验收勾选按规则留给主 agent。工作区干净，没有半成品残留。
+- **提交范围**：`22d2791`，5 个文件全是本票的（`server/items.js` / `invites.js` / `app.js` + 新测试 + 本票）；全量套件 **293 项全绿**（289 + 本票 4）。
+- **独立复核三条硬声明**：① `items.js` 里 `item_invites` **只出现在注释里**、没有任何 SQL；② `items.js` **不 import `invites.js`**；③ `createItems(` 的**唯一调用点是组合根**——依赖虽必填，却没给测试添负担（测试都走 `createApp`）。
+- **路线选择我认可**（注入读取器而非闭包）：读取器只依赖 `store`，因此组合根里 `createPendingInviteesOf(store)` → `createItems(...)` → `createInvites(store, items)` 是顺序直读、没有前向引用地雷；若注入 `(id) => invites.pendingInviteesOf(id)` 就需要晚绑定闭包。缺依赖直接抛 `TypeError` 与 `createSse({ roleOf })` 同一取舍：宁可接线当场炸，也不要通知静默消失。
+- **票里那条范围外观察已带进下一张票**：删账号路径的 `deleteSoleOwnedItems` 会删掉该账号唯一拥有的**已归档**事项，它们的待接受邀请同样级联消失，而 `pendingInviteesFrom(账号)` 覆盖不到「别人替它的事项发出的邀请」——已写进工单 03 的派工说明，由 03 判断能否顺带覆盖。
