@@ -24,7 +24,7 @@
 用 `Start-Process` 起独立进程，脱离宿主会话：
 
 ```bash
-powershell.exe -NoProfile -Command '$env:RILI_DB="./data/verify-01.db"; $env:RILI_ADMIN_USER="admin"; $env:RILI_ADMIN_PASSWORD="<临时密码>"; $env:PORT="4400"; $env:HOST="127.0.0.1"; Start-Process -FilePath "node" -ArgumentList "server/index.js" -WorkingDirectory "D:\rili" -WindowStyle Hidden -RedirectStandardOutput "D:\rili\data\verify-01.out.log" -RedirectStandardError "D:\rili\data\verify-01.err.log"'
+powershell.exe -NoProfile -Command '$env:RILI_DB="./data/verify-01.db"; $env:RILI_ADMIN_USER="admin"; $env:RILI_ADMIN_PASSWORD="<临时密码，至少 8 位>"; $env:PORT="4400"; $env:HOST="127.0.0.1"; Start-Process -FilePath "node" -ArgumentList "server/index.js" -WorkingDirectory "D:\rili" -WindowStyle Hidden -RedirectStandardOutput "D:\rili\data\verify-01.out.log" -RedirectStandardError "D:\rili\data\verify-01.err.log"'
 ```
 
 要点，每条都踩过：
@@ -33,7 +33,7 @@ powershell.exe -NoProfile -Command '$env:RILI_DB="./data/verify-01.db"; $env:RIL
 - `-WorkingDirectory` 给**绝对路径**；`RILI_DB` 给相对路径没问题（相对工作目录解析）。
 - `HOST=127.0.0.1` 只绑本机，避免局域网暴露与防火墙弹窗；要让同事访问才用默认的 `0.0.0.0`。
 - 日志重定向到 `data/`（已被 `.gitignore` 忽略），否则出问题时无迹可查。
-- `RILI_ADMIN_USER` / `RILI_ADMIN_PASSWORD` **只在账号表为空时生效**，用来给空库造第一个 `admin`。
+- `RILI_ADMIN_USER` / `RILI_ADMIN_PASSWORD` **只在账号表为空时生效**，用来给空库造第一个 `admin`。密码**至少 8 位**（`server/accounts.js` 的 `validatePassword`）：短了不会建账号，而服务**照常起来**，只是启动日志里多一行 `⚠ 无法创建初始 admin：密码至少 8 位`——于是没人能登录，也没人能批准注册申请，看起来却像「起来了但登不上」。README 的「运行」一节同口径。
 
 **收尾：怎么确认它真的停了**
 
@@ -43,9 +43,15 @@ powershell.exe -NoProfile -Command "Stop-Process -Id <pid> -Force"
 netstat -ano | grep ':4400 ' | grep LISTENING     # 空 = 真停了
 ```
 
-- **必须盯 `LISTENING` 那一行**。刚停完 `grep ':4400 '` 还会输出几行，那是你刚才探测用的**客户端套接字残留的 `TIME_WAIT`**（本地随机端口 → 4400），不是服务还活着。只看端口号会误判。
+- **必须盯 `LISTENING` 那一行**。刚停完 `grep ':4400 '` 还会输出几行，那是你刚才探测用的**客户端套接字残留的 `TIME_WAIT`**（本地随机端口 → 4400），不是服务还活着。只看端口号会误判。本次实测：停掉 4400 上的实例后，`grep ':4400 '` 仍列出两条 `127.0.0.1:<随机端口> → 127.0.0.1:4400  TIME_WAIT`，而 `LISTENING` 那行已经消失。
 - 别在 Git Bash 里用 `taskkill /F /PID <pid>`：MSYS 把斜杠参数当路径改写，报的是 `错误: 无效参数/选项 - 'F:/'`，进程纹丝不动（实测）。统一用 PowerShell 的 `Stop-Process`。
-- 停完顺手看一眼**其它端口还在不在**——防的就是上面那条连坐。
+- 停完**复查还有哪些 node 活着**，防的就是上面那条连坐：
+
+  ```bash
+  powershell.exe -NoProfile -Command "Get-Process node -ErrorAction SilentlyContinue | Select-Object Id, StartTime"
+  ```
+
+  实测停掉自己的实例后这条为空。若你起的实例已停、这里却还有别的 node——先别急着动手，那是别人的服务。
 
 **实测证据（2026-09-18，工单 01）**：上面这条命令起了端口 4400 的隔离实例（空库 `data/verify-01.db`），`GET /` 返回 200、未登录的 `GET /api/session` 返回 401，stdout 打出「rili 已启动：http://127.0.0.1:4400 / 数据库：./data/verify-01.db / 已创建初始 admin 账号：admin」，stderr 为空；`netstat` 查到 PID 94760，`Stop-Process` 后 `LISTENING` 行消失、node 进程数归零。用完的库与日志已删除。
 

@@ -113,3 +113,18 @@ netstat -ano | grep ':4400 ' | grep LISTENING        # 期望为空
 
 - **没有复现「停后台任务会连坐杀掉其它服务」**：要复现就得先起两个服务再故意连坐一次，代价是别的实例陪葬。按已知事实记录并在文档里标注来源（2026-09-17 的观察）。
 - **没有动 `CONTEXT.md`**：本票明确不改词表；产品名对齐（`CONTEXT.md` 首行 + README 首行）是 closeout 的另一张票。
+
+## Comments
+
+**2026-09-18 · `/code-review` 两轴复核后收紧三处。**
+
+两轴的结论：Spec 轴判定验收清单逐条落地、对交接文档的两处修正经**独立复现**为真（宽松 `deepEqual` 通过、`node:assert/strict` 失败且报错带 `[Object: null prototype]` 标记）、`AGENTS.md` 加索引与 tracker 入库两件自行动作**不算越界**（另三份 docs/agents 文档在 `AGENTS.md` 都有条目；上一轮的 `.scratch/browser-verification/` 也已在库里）；Standards 轴核对引用路径（`test/migration.test.js:100` 的注释属实）、`npm test` 88 绿、`master` 是 `main` 严格祖先、前端无 CDN 引用等均属实。据此改了三处：
+
+1. 启动命令里的密码标注**「至少 8 位」**，并写明短了的后果：不建账号、服务**照常起来**、日志里只多一行「⚠ 无法创建初始 admin：密码至少 8 位」（`server/accounts.js:240` 的 `bad-password` 分支）。这正是「起来了但登不上」那种最难查的形态，而这条命令的用途就是给空库造账号。
+2. 收尾步骤补上**可复制的复查命令**（`Get-Process node`）——原文只有「顺手看一眼其它端口」这句话、没有命令；TIME_WAIT 那条同时补标「本次实测」，否则读者分不清它是本轮的新观察还是上一轮的旧记录（本文档承诺过标明来源）。
+3. `issue-tracker.md` 的「with `main` pushed to it」改成「tracking `main`」：本轮两笔提交还没推（代理没跑），本地领先远端，原措辞此刻不精确。
+
+**评审指出、但本票未改的两条**（都在 `.scratch/closeout/spec.md` 正文里，不属本票范围）：
+
+- spec 自身有张力：第 57 行称「本轮不新增术语，`CONTEXT.md` 无需改动」，第 67 行又要求「`CONTEXT.md` 的首行」随产品名对齐——后者正是工单 06 要做的。两处并存会让执行 06 的人先愣一下，建议在 06 或 07 收口时把第 57 行的限定词收紧成「不新增术语」。
+- 同一份 spec 的 User Stories 用「管理员」指代 admin 专属动作（批准申请、改角色、删账号、归档视图），而 `CONTEXT.md`「管理员」条要求特指最高权限时一律写 `admin`。属既有文本，未改。
