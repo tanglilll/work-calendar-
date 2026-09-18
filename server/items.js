@@ -201,12 +201,28 @@ export function createItems(store, colors) {
     const now = new Date().toISOString();
     const item = tx(() => {
       const color = colors.pickColor();
+      // 进展在新建路径同样要落库（校验层已经备好了值，写入层不能漏掉它，
+      // 否则用户填了进展、界面也发了，保存回来却是空的）。语义与更新路径一致：
+      // 有进展才记下它的更新时间，没进展两列都是空。
+      const progress = values.progress ?? null;
+      const progressUpdatedAt = progress === null ? null : now;
       const info = db
         .prepare(
-          `INSERT INTO items (title, event_date, due_date, tag, color, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO items
+             (title, event_date, due_date, tag, progress, progress_updated_at, color, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(values.title, values.event_date, values.due_date, values.tag, color, now, now);
+        .run(
+          values.title,
+          values.event_date,
+          values.due_date,
+          values.tag,
+          progress,
+          progressUpdatedAt,
+          color,
+          now,
+          now,
+        );
       const id = Number(info.lastInsertRowid);
       writeOwners(id, ownerIds);
       return getItem(id);

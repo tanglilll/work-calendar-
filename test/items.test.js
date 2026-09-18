@@ -355,4 +355,24 @@ describe('进展', () => {
     assert.equal(twice.progress, '已提测', '覆盖式：只有一段进展，不保留历史');
     app.close();
   });
+
+  // 下面两条挡的是「校验层备好了值、写入层漏了列」这类漏写：新建对话框总是
+  // 提交进展字段，归一化层也为新建路径备好了它，但插入语句曾经只写别的列。
+  test('新建时就带上进展 → 落库，且记下它的更新时间', () => {
+    const { app, admin } = freshWorld();
+    const { item } = app.items.createItem(admin, draft({ progress: '已立项' }));
+
+    assert.equal(item.progress, '已立项', '新建时填的进展不能丢');
+    assert.match(item.progress_updated_at, /^\d{4}-\d{2}-\d{2}T/, '记下更新时间（ISO 时间）');
+    app.close();
+  });
+
+  test('新建时只填空白 → 进展与它的更新时间都是空', () => {
+    const { app, admin } = freshWorld();
+    const { item } = app.items.createItem(admin, draft({ progress: '   ' }));
+
+    assert.equal(item.progress, null, '空白视为没填');
+    assert.equal(item.progress_updated_at, null, '没进展就不该有更新时间');
+    app.close();
+  });
 });
