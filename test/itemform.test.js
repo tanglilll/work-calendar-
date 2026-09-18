@@ -70,8 +70,10 @@ describe('itemValues', () => {
     const values = itemValues(fd);
     assert.deepEqual(
       Object.keys(values).sort(),
-      ITEM_FORM_FIELDS.map((f) => f.name).sort(),
+      [...ITEM_FORM_FIELDS.map((f) => f.name), 'owner_ids'].sort(),
+      '字段表 + 勾选组：两类值都从表单读出来（勾选组必须在这里取，漏掉它 manager/admin 就建不出事项）',
     );
+    assert.deepEqual(values.owner_ids, [], '没勾选时是空数组，不是 undefined');
     assert.equal(values.title, '写周报');
     assert.equal(values.progress, '已立项');
     assert.equal(values.tag, null, '表单没有这个控件时 FormData.get 给 null，归一交给 itemPayload');
@@ -107,5 +109,29 @@ describe('表单控件与字段表', () => {
     const wired = [...new Set([...ITEM_FORM_FIELDS.map((f) => f.name), ...READ_SEPARATELY])].sort();
 
     assert.deepEqual(inMarkup, wired, '控件名与字段表 / 单独读取清单必须一一对应');
+  });
+});
+
+describe('itemValues 的读取面（勾选组必须在这里取值）', () => {
+  /** 冒充 FormData：get(name) 给单值，getAll(name) 给勾选组的全部已选项。 */
+  const reader = (single, multi = {}) => ({
+    get: (n) => single[n] ?? null,
+    getAll: (n) => multi[n] ?? [],
+  });
+
+  test('已勾选的 owner_ids 进 payload——manager/admin 建不出事项那个 bug 的回归', () => {
+    const values = itemValues(reader(VALUES, { owner_ids: ['2', '3'] }));
+    assert.deepEqual(itemPayload(values, { canAssign: true }).owner_ids, [2, 3], '勾选组必须由 itemValues 取值');
+  });
+
+  test('没有勾选组时（普通成员的表单根本没有这个控件）值对象给空数组，payload 里不出现 owner_ids', () => {
+    const values = itemValues(reader(VALUES));
+    assert.deepEqual(values.owner_ids, []);
+    assert.equal('owner_ids' in itemPayload(values, { canAssign: false }), false);
+  });
+
+  test('读取器没有 getAll（纯对象）也不炸——勾选组只在真的能读多值时取值', () => {
+    const values = itemValues({ get: (n) => VALUES[n] });
+    assert.equal(values.owner_ids, undefined);
   });
 });

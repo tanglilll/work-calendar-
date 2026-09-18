@@ -27,17 +27,24 @@ export const ITEM_FORM_FIELDS = [
   { name: 'progress', empty: '' },
 ];
 
-/** 从表单读取器（FormData，或任何提供 get(name) 的对象）按字段表取出普通值对象。读 DOM 的动作在调用方。 */
+/**
+ * 从表单读取器（FormData，或任何提供 get(name) 的对象）按字段表取出普通值对象。读 DOM 的动作在调用方。
+ *
+ * `owner_ids` 是勾选组：`get(name)` 只给第一个，必须走 `getAll`。它不进字段表（那张表管的是
+ * 行上的列），但**取值必须在这里做**——留给调用方正是它被整轮漏掉的原因（抽取时丢了
+ * `collect()` 里那一行，manager/admin 于是在界面上建不出事项）。
+ */
 export function itemValues(reader) {
-  return Object.fromEntries(ITEM_FORM_FIELDS.map(({ name }) => [name, reader.get(name)]));
+  const values = Object.fromEntries(ITEM_FORM_FIELDS.map(({ name }) => [name, reader.get(name)]));
+  if (typeof reader.getAll === 'function') values.owner_ids = reader.getAll('owner_ids').map(Number);
+  return values;
 }
 
 /**
  * 值对象 → payload。不碰 DOM，因此 node:test 里能直接断言（见 test/itemform.test.js）。
  *
- * owner_ids 不走字段表：它是可多选的勾选组，FormData.get 只给第一个，由调用方数出已勾选的项。
- * 这个键只在能直接改名单的人（manager/admin）身上出现——普通成员保存时不提交它，
- * 因此不会试图改名单（是否允许仍由服务端判一次）。id 一并转成数字，与请求体的约定一致。
+ * owner_ids 只在能直接改名单的人（manager/admin）身上出现——普通成员保存时不提交它，
+ * 因此不会试图改名单（是否允许仍由服务端判一次）。id 已在 `itemValues` 里转成数字。
  */
 export function itemPayload(values, { canAssign = false } = {}) {
   const payload = {};
