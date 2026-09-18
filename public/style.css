@@ -96,14 +96,14 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent-soft
   background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
-/* 顶栏的每一块都不许在内部断行，也不许被压扁；宽度不够时由上一行的 flex-wrap 整块挪下去 */
+/* 顶栏的块内部不断行、不被压扁（例外只有下面按钮组那一条）；宽度不够时整块折行，而不是把文字逐字拆开 */
 .topbar > * { flex-shrink: 0; white-space: nowrap; }
 .brand { font-weight: 700; font-size: 16px; }
 .month-nav { display: flex; align-items: center; gap: 6px; }
 .month-label { min-width: 110px; text-align: center; font-weight: 600; }
 .topbar-right { margin-left: auto; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-/* 按钮组是上面那条的例外：它必须能收窄，自己那条 flex-wrap 才会生效。
-   不收窄时它的宽度等于所有按钮的最大内容宽，窄屏下会直接顶出视口把「登出」裁掉。 */
+/* 唯一的例外：按钮组必须能收窄，否则它的宽度恒等于所有按钮的最大内容宽，
+   自己那条 flex-wrap 永不触发，窄屏下会顶出视口把「登出」裁掉。 */
 .topbar > .topbar-right { flex-shrink: 1; }
 .whoami { color: var(--muted); font-size: 13px; }
 
