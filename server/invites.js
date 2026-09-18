@@ -7,9 +7,35 @@
  *
  * 「能不能给这条事项发邀请」不在这里判：那是 items.js 的门
  * （requireItemAccess(actor, itemId, 'invite')），访问与归档一起管。
+ *
+ * item_invites 的一切查询都在这个 module 里：除了本文件的读写，
+ * 「某条事项的待邀请人」还以 createPendingInviteesOf 的形式交给组合根，
+ * 注入 items 的删除路径（见那个函数的说明）。
  */
 import { accountChanged, ownerChanges } from './changes.js';
 import { httpError } from './http.js';
+
+/**
+ * 「某条事项的待邀请人」的读取器 —— 这个查询的唯一实现，由组合根交给 items。
+ *
+ * 为什么需要它：删除事项会级联删掉它名下的待接受邀请
+ * （item_invites.item_id 的 ON DELETE CASCADE），而被邀请人还不是 owner，
+ * 收不到事项那一路事件 —— 必须由删除方定向通知，否则他的角标停在旧值。
+ * 而 items 不能 import invites（invites 已经依赖 items：createInvites(store, items)），
+ * 于是邀请表的知识留在这里，读取器由组合根注入。
+ *
+ * 只依赖 store，不依赖 items，所以组合根可以先造它、再造 items 与 invites，
+ * 接线没有先后地雷（对照 createSse({ roleOf }) 的注入形状）。
+ * 顺序按 account_id 升序，同一个库状态给出同一份名单，断言与推送都可复现。
+ */
+export function createPendingInviteesOf(store) {
+  const { db } = store;
+  return (itemId) =>
+    db
+      .prepare('SELECT account_id FROM item_invites WHERE item_id = ? ORDER BY account_id ASC')
+      .all(itemId)
+      .map((row) => row.account_id);
+}
 
 export function createInvites(store, items) {
   const { db, tx } = store;

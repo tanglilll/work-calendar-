@@ -9,7 +9,7 @@
 import { openDb } from './db.js';
 import { createColors } from './colors.js';
 import { createItems } from './items.js';
-import { createInvites } from './invites.js';
+import { createInvites, createPendingInviteesOf } from './invites.js';
 import { createSessions } from './auth.js';
 import { createAccounts } from './accounts.js';
 import { createSse } from './sse.js';
@@ -18,7 +18,11 @@ import { createApi } from './routes.js';
 export function createApp({ dbPath }) {
   const store = openDb(dbPath);
   const colors = createColors(store);
-  const items = createItems(store, colors);
+  // 删事项级联删掉待接受邀请时要通知被邀请人：读取器由 item_invites 的拥有者
+  // （invites.js）提供，注入 items —— items 不能 import invites，invites 已经依赖 items。
+  // 它只依赖 store，所以接线没有先后要求。
+  const pendingInviteesOf = createPendingInviteesOf(store);
+  const items = createItems(store, colors, { pendingInviteesOf });
   const invites = createInvites(store, items);
   const sessions = createSessions(store);
   const accounts = createAccounts(store, items, invites);

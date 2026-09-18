@@ -9,10 +9,12 @@
  * 变更描述由 changes.js 的词表构造函数产生——这个 module 不自己拼 to/kind。
  *
  * store 与 colors 由组合根注入 —— 这个 module 不再自己创建数据库连接。
+ * 「某条事项的待邀请人」同样由组合根注入（pendingInviteesOf）：那张表归 invites.js，
+ * 而 invites 已经依赖 items，所以 items 反过来读它就会成环（见 deleteItem）。
  */
 import { LIMITS, isValidDateString, isTagAllowed, TAGS } from './config.js';
 import { canAccessItem, capabilitiesOf, ownerScope } from './visibility.js';
-import { ownerChanged, ownerChanges } from './changes.js';
+import { accountChanged, ownerChanged, ownerChanges } from './changes.js';
 import { httpError } from './http.js';
 
 const ITEM_COLUMNS = `
@@ -135,8 +137,17 @@ export const ITEM_ACCESS_PURPOSES = Object.freeze({
   delete: null,
 });
 
-export function createItems(store, colors) {
+/**
+ * @param {{ pendingInviteesOf: (itemId: number) => number[] }} deps
+ *   依赖显式注入，缺了直接炸（与 createSse 要 roleOf 同一取舍）：
+ *   pendingInviteesOf 回答「这条事项的待邀请人是谁」，实现在 invites.js
+ *   （item_invites 的拥有者），由组合根接线 —— 见 deleteItem 的说明。
+ */
+export function createItems(store, colors, { pendingInviteesOf } = {}) {
   const { db, tx } = store;
+  if (typeof pendingInviteesOf !== 'function') {
+    throw new TypeError('createItems 需要注入 pendingInviteesOf —— 删事项时要通知随级联消失的邀请收件人');
+  }
 
   /** 一次把一批事项的 owner 名单捞出来，避免逐条查询。 */
   function withOwners(rows) {
@@ -408,12 +419,27 @@ export function createItems(store, colors) {
    * 删除：门的 delete 这一格是**唯一放行已归档事项**的用途（理由写在
    * ITEM_ACCESS_PURPOSES 上面）。归档视图只读、不提供入口，所以这条能力
    * 只从 REST 接口可达——它以前就在，这里只是把它写进门里。
+   *
+   * 它的待接受邀请随外键级联消失（item_invites.item_id 的 ON DELETE CASCADE）：
+   * 被邀请人还不是 owner，收不到上面那路 items 事件，得单独定向通知 ——
+   * 否则他的角标停在旧值、点进去那条邀请已经没了，直到下一次全量重拉才对上。
+   * 「谁是这条事项的待邀请人」问注入的 pendingInviteesOf（表与查询在 invites.js，
+   * 这里不自己拼 SQL，dependency 也不反过来指向 invites）。
+   * 必须在删除**前**问：删掉之后 item_invites 里已经查不到了。
    */
   function deleteItem(account, id) {
     const item = requireItemAccess(account, id, 'delete');
+    const orphanedInvitees = pendingInviteesOf(id);
     const info = db.prepare('DELETE FROM items WHERE id = ?').run(id);
     if (info.changes === 0) throw httpError(404, '事项不存在');
-    return { item, changed: [ownerChanged(item.id, ownerIdsOf(item), 'deleted')] };
+    return {
+      item,
+      changed: [
+        ownerChanged(item.id, ownerIdsOf(item), 'deleted'),
+        // 没有人受影响就不产生多余的变更（与删账号那半边同一取舍）
+        ...(orphanedInvitees.length ? [accountChanged(orphanedInvitees, 'invites-changed')] : []),
+      ],
+    };
   }
 
   /**
