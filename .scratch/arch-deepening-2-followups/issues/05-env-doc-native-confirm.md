@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 ## 形状
 
@@ -39,3 +39,9 @@
 - **测试**：`npm test` 第一次跑在并发波次中撞上别人未落地的重构（`test/sse.test.js`、`test/viewer-authority.test.js` 从 `server/sse.js` import 已迁走的 `adminsChanged`，`test/change-vocabulary.test.js` 同批在改）——255 pass / 3 file-level fail，与本文档无关；按硬规则隔 20 秒重跑 → **289 项通过、0 失败**（基线 278 + 同波次其它线的新增断言）。
 - **零代码影响**：本工单只碰了上面列出的两个 markdown 文件；`git status` 里其余的 `server/*`、`public/*`、`test/*` 改动都是并行 agent 的，提交时用 pathspec 只带自己的两个文件。
 - **提交**：一笔 `docs:` 提交进 `main`，paths 只含本工单两个文件（`docs/agents/local-environment.md` 与本票）。
+
+## 主 agent 核对（2026-09-18）
+
+- **提交范围**：`f7558e4`，2 个文件（环境文档 + 本票）；纯文档改动，`npm test` 仍全绿。
+- 新增 §6，按文档既有体例写成三段（现象 / 为什么重要 / 正确做法）加来源，并交叉引用 `.scratch/browser-verification/spec.md` 而不转载它的内容；首段的环境事实枚举同步补了「内置浏览器支持哪些原生对话框」一处。
+- **顺带记一条并发期的现象**（agent 报告的）：它第一次跑全量时撞上 `255 pass / 3 file-level fail`——那是并行工单 01 的 import 迁移在途，另外三个测试文件还在 import 已迁走的导出。隔 20 秒复跑即全绿。**这类失败不要当成自己的问题去修**：并发波次里「别人正在搬 import」会让整文件 import 失败，判断标准是复跑一次。

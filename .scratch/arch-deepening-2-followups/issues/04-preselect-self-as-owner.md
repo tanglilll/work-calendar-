@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 ## 形状
 
@@ -80,3 +80,11 @@ export function initialOwnerIds({ item = null, me = null, canAssign = false } = 
 - 全量：`npm test` → **289 项通过 / 0 失败**（基线 278 + 本票 9 + 工单 01 并行新增 2）。
 - 中途插曲（与本票无关，记录以免误读）：本票落地时工单 01 正在把 `CHANGE_KINDS` 从 `server/sse.js` 迁去 `server/changes.js`，`test/sse.test.js` / `test/viewer-authority.test.js` / `test/change-vocabulary.test.js` 一度 import 失败；排除这三张文件后跑 255 项全绿（0 失败），01 落地后全量 289 全绿。
 - 提交：`feat(itemform): 新建事项预勾选当前账号（工单 04）`，只带 `public/itemform.js`、`public/app.js`、`test/itemform.test.js`、本文件。hash 不在同一条提交里自引，留给主 agent 收口时回填。
+
+## 主 agent 核对（2026-09-18）
+
+- **提交范围**：`f528447`，4 个文件全是本票的；工作区干净；全量套件 **289 项全绿**（本票 +9）。
+- **纯函数**：`initialOwnerIds({ item, me, canAssign })` —— 新建 → `[me.id]`；编辑 → 该事项的 owner 名单；`canAssign` 为假 → `[]`；`me` 缺失则退到改动前的行为（不预勾，也不炸）。当前账号走 **`ctx.me`**，与 `openAdminDialog` 的既有先例一致，没有发明第二套传法。
+- **先红后绿成立**：把实现写成返回空数组的空壳（= 改动前行为）后，`test/itemform.test.js` **5 红 16 绿**，红的正是新建预勾、编辑态、渲染标记与调用点四条判据。
+- **一处刻意保住的行为**：`invitable` 仍按该事项的 owner 名单判定——若跟着换成「预勾选集合」，普通成员编辑时会把已在名单里的人重新列进邀请。
+- **真界面确认留给下一次段界冒烟**（票面约定）：勾选框在真实点击后确实勾上，本票只做到纯函数 + 渲染标记层。

@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately.（**要先做**：02 与 03 都要往词表里加东西，先抽完它们才有最终落点）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 ## 形状
 
@@ -51,3 +51,10 @@ sse   exports: ['createSse']
 - 后：`items / invites / accounts / auth → changes.js`；`sse.js → changes.js`（只为 `TARGET` / `CHANGE_KINDS` / `isChange`）；`app.js → sse.js`（唯一创建中枢的组合根）。`grep -rn "from './sse.js'" server/` 只剩 `app.js` 一行。
 
 **全量套件**：`npm test` → `tests 289 / pass 289 / fail 0`（基线 278 + 本票新增 2 条判据；其余增量为同工作区并行票的测试）。
+
+## 主 agent 核对（2026-09-18）
+
+- **提交范围**：`156578d`，11 个文件全是本票的；工作区干净；全量套件 **289 项全绿**（本票 +2）。
+- **依赖方向独立复核**（`node` 实跑导出面）：`changes.js` 导出 9 个名字（`TARGET` / `CHANGE_KINDS` / 四个构造函数 / `isChange` / `ownerDiff` / `ownerChanges`）；**`sse.js` 只导出 `createSse`**；**`auth.js` 不再 import `sse.js`**；**`server/` 里 import `sse.js` 的只剩组合根 `app.js`** —— 这正是本票要钉死的依赖方向。
+- **语义无变化**：`publish` 的三道关、`accountDeleted` → `disconnectAccount`、构造函数的校验与冻结原样。
+- arch-deepening-2 工单 03 里那条被追认的依赖理由（「auth 原本就在写这个协议的字面量」）**就此失效**——已写进票里，下一个读那票的人不会再据此认为耦合是必要的。
