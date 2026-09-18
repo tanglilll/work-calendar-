@@ -31,8 +31,10 @@ import {
 
 const sourceOf = (file) => readFileSync(new URL(`../server/${file}`, import.meta.url), 'utf8');
 
-/** 真中枢（不注入替身）：publish 这道关口本身就是要被测的对象。 */
-const createHub = () => createSse();
+/** 真中枢（不注入替身）：publish 这道关口本身就是要被测的对象。
+ *  roleOf 是中枢唯一的必需依赖（推送时的权威角色，工单 04）——这里给个常量替身，
+ *  本文件测的是词表与关口，不是角色判据。 */
+const createHub = () => createSse({ roleOf: () => 'user' });
 
 /** 桩 res：只记下写出的内容，不真发；`events()` 按 SSE 的 wire format 解析。 */
 function stubRes() {
@@ -70,8 +72,8 @@ function stubRes() {
 }
 
 describe('变更词表', () => {
-  test('三个去向，各自允许的 kind 就是这些——新增一种变更必须写进词表', () => {
-    assert.deepEqual(Object.keys(CHANGE_KINDS).sort(), ['accounts', 'admins', 'itemOwners']);
+  test('四个去向，各自允许的 kind 就是这些——新增一种变更必须写进词表', () => {
+    assert.deepEqual(Object.keys(CHANGE_KINDS).sort(), ['accounts', 'admins', 'connections', 'itemOwners']);
     assert.deepEqual([...CHANGE_KINDS.itemOwners].sort(), [
       'archived',
       'created',
@@ -87,6 +89,8 @@ describe('变更词表', () => {
       'role-changed',
       'signed-in',
     ]);
+    // 第四类不是「通知谁」而是「断开谁」：账号已删除，连接收不到任何事件（工单 04）
+    assert.deepEqual([...CHANGE_KINDS.connections].sort(), ['account-deleted']);
   });
 
   test('词表是冻结的：闭集不会被运行时改写', () => {

@@ -6,7 +6,7 @@
 import { hashPassword } from './auth.js';
 import { LIMITS } from './config.js';
 import { ROLES } from './visibility.js';
-import { accountChanged, adminsChanged, ownerChanges } from './sse.js';
+import { accountChanged, accountDeleted, adminsChanged, ownerChanges } from './sse.js';
 import { httpError } from './http.js';
 
 const USERNAME_RE = /^[\p{L}\p{N}_.-]+$/u;
@@ -146,6 +146,15 @@ export function createAccounts(store, items) {
       .get(username);
   }
 
+  /**
+   * 按 id 取权威角色 —— SSE 中枢在【推送时】问它（组合根接进 createSse 的 roleOf）。
+   * 连接里不存 role 副本，所以降权、删号立刻在旧连接上生效；账号已不存在返回 null。
+   */
+  function roleOf(accountId) {
+    const row = db.prepare('SELECT role FROM accounts WHERE id = ?').get(accountId);
+    return row?.role ?? null;
+  }
+
   function changeRole(actorId, targetId, role) {
     if (!ROLES.includes(role)) throw httpError(400, '角色不合法');
     const target = db.prepare('SELECT id, username, role FROM accounts WHERE id = ?').get(targetId);
@@ -200,7 +209,12 @@ export function createAccounts(store, items) {
       return { ...target, deletedArchivedItems: archived };
     });
 
-    return { removed, changed: [adminsChanged('accounts')] };
+    return {
+      removed,
+      // 账号没了，它的连接立刻断开（走词表的 connections 去向）；
+      // admin 面板再各自刷新名单。
+      changed: [accountDeleted(target.id), adminsChanged('accounts')],
+    };
   }
 
   /** 把 fromId 名下全部事项转给 toId。 */
@@ -259,6 +273,7 @@ export function createAccounts(store, items) {
     listAccounts,
     listOwners,
     findAccountByUsername,
+    roleOf,
     changeRole,
     deleteAccount,
     transferItems,

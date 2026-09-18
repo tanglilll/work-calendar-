@@ -51,14 +51,20 @@ export function ownerScope(account) {
 }
 
 /**
- * SSE：这条事件该不该推给这个客户端。
- * 这是「服务端过滤」的落点——user 绝不能收到他人的事项事件。
- * viewer 需要 { role, accountId }；scope==='self' 的事件由调用方按账号定向，不走这里。
+ * SSE：这条事件该不该推给这个客户端 —— 三条投递路径（事项、admin、账号定向）
+ * 唯一的判据，也是「服务端过滤」的落点：user 绝不能收到他人的事项事件。
+ *
+ * viewer 是【推送时】取到的权威值 { accountId, role }（连接里不存 role 副本，
+ * 降权之后旧连接立刻按新角色判）；账号已不存在时为 null，什么都收不到。
+ * 账号定向（scope==='self'）的收件账号也在事件里，于是它同样由这里裁决，
+ * 中枢不再自己比对账号 id。
  */
 export function canReceiveEvent(viewer, event) {
+  if (!viewer) return false;
   if (event.scope === 'admin') return capabilitiesOf(viewer).managesAccounts;
   if (event.scope === 'items') {
     return capabilitiesOf(viewer).seesAllItems || event.ownerId === viewer.accountId;
   }
+  if (event.scope === 'self') return event.accountId === viewer.accountId;
   return false;
 }

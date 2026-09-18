@@ -117,8 +117,16 @@ describe('canReceiveEvent — SSE 在服务端过滤', () => {
     assert.equal(canReceiveEvent(VIEWER(10, 'admin'), { scope: 'admin' }), true);
   });
 
-  test('self 事件走账号定向，不由这里裁决', () => {
-    assert.equal(canReceiveEvent(VIEWER(7, 'user'), { scope: 'self' }), false);
+  test('账号定向（self）只到收件账号，由这里裁决', () => {
+    assert.equal(canReceiveEvent(VIEWER(7, 'user'), { scope: 'self', accountId: 7 }), true);
+    assert.equal(canReceiveEvent(VIEWER(7, 'user'), { scope: 'self', accountId: 8 }), false, '别人的定向事件不外溢');
+    assert.equal(canReceiveEvent(VIEWER(7, 'user'), { scope: 'self' }), false, '没带收件账号的事件谁也收不到');
+  });
+
+  test('账号已不存在（viewer 为 null）：什么都收不到，也不抛错', () => {
+    assert.equal(canReceiveEvent(null, itemsEvent(7)), false);
+    assert.equal(canReceiveEvent(null, { scope: 'admin' }), false);
+    assert.equal(canReceiveEvent(null, { scope: 'self', accountId: 7 }), false);
   });
 });
 

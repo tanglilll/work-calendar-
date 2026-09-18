@@ -190,11 +190,11 @@ describe('SSE 广播中枢', () => {
     assert.deepEqual(adminClient.events().at(-1), { event: 'admin', data: { scope: 'admin', kind: 'accounts' } });
     assert.deepEqual(linClient.events().map((e) => e.event), ['hello'], 'user 收不到 admin 事件');
 
-    // 账号定向事件：只到那个账号（这里是 lin）
+    // 账号定向事件：只到那个账号（这里是 lin）；事件带上收件账号，判据据此裁决
     hub.broadcastToAccount(lin.id, 'invites-changed');
     assert.deepEqual(linClient.events().at(-1), {
       event: 'self',
-      data: { scope: 'self', kind: 'invites-changed' },
+      data: { scope: 'self', accountId: lin.id, kind: 'invites-changed' },
     });
     assert.deepEqual(zhaoClient.events().map((e) => e.event), ['hello', 'items'], '定向事件不外溢到别的账号');
 
@@ -209,7 +209,7 @@ describe('SSE 广播中枢', () => {
   });
 
   test('closeAll 关掉全部连接，之后不再写入', async () => {
-    const hub = createSse();
+    const hub = createSse({ roleOf: () => 'user' });
     const client = stubRes();
     hub.addClient(client, { id: 7, role: 'user' });
 
@@ -225,8 +225,9 @@ describe('SSE 广播中枢', () => {
   });
 
   test('心跳只写自己这套中枢的客户端', async () => {
-    const pinged = createSse({ heartbeatMs: 5 });
-    const other = createSse({ heartbeatMs: 5 });
+    const stubAuthority = { roleOf: () => 'user' };
+    const pinged = createSse({ ...stubAuthority, heartbeatMs: 5 });
+    const other = createSse({ ...stubAuthority, heartbeatMs: 5 });
     const mine = stubRes();
     const theirs = stubRes();
     pinged.addClient(mine, { id: 1, role: 'user' });
@@ -247,7 +248,7 @@ describe('SSE 广播中枢', () => {
     const source = (p) => readFileSync(join(HERE, '..', 'server', p), 'utf8');
     assert.ok(!/from '\.\/sse\.js'/.test(source('routes.js')), 'routes.js 不该 import sse.js');
     assert.ok(!/from '\.\/sse\.js'/.test(source('index.js')), '入口不该 import sse.js，心跳走注入的中枢');
-    assert.match(source('app.js'), /createSse\(\)/, '组合根是唯一创建中枢的地方');
+    assert.match(source('app.js'), /createSse\(\{/, '组合根是唯一创建中枢的地方');
     assert.match(source('app.js'), /createApi\(\{[^}]*\bsse\b[^}]*\}\)/, '中枢随其余 module 一起注入 routes');
   });
 });

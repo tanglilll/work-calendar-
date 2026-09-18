@@ -178,7 +178,11 @@ describe('deleteAccount', () => {
     // 未归档事项为 0，所以删除守卫放过——但归档项还在他名下
     const { removed, changed } = app.accounts.deleteAccount(admin.id, zhao.id);
     assert.equal(removed.deletedArchivedItems, 1);
-    assert.deepEqual(changed, [{ to: 'admins', kind: 'accounts' }]);
+    assert.deepEqual(changed, [
+      // 账号没了：它的连接立刻断开（词表的 connections 去向），不是通知
+      { to: 'connections', accountIds: [zhao.id], kind: 'account-deleted' },
+      { to: 'admins', kind: 'accounts' },
+    ]);
     assert.equal(app.accounts.findAccountByUsername('zhao'), undefined);
     assert.equal(app.items.listArchived(admin).length, 0, '归档项随账号一起删除');
     app.close();
