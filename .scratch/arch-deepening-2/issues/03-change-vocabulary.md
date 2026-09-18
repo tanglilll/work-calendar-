@@ -4,7 +4,7 @@
 
 **Blocked by:** 02（判据需要可注入的中枢才能断言「谁收到了什么」）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 ## 形状
 
@@ -140,3 +140,12 @@ $ grep -rn "kind: '\|to: '" server/                     → 无匹配（退出�
 - 现在所有 `to: itemOwners` 变更都带 `itemId`，所以 publish 里 `itemId ?? null` 那条兜底删了
   （由构造函数保证），wire 上不再出现 `itemId: null`。
 
+
+## 主 agent 核对（2026-09-18）
+
+- **提交范围**：`3a58045`，9 个文件；全量套件 **239 项全绿**（本票新增 16）。工作区干净。
+- **词表闭集与三道关成立**：`TARGET` 三个去向 + `CHANGE_KINDS` 冻结闭集；构造函数对词表外 kind、缺 `itemId`、空名单一律 `TypeError`；`publish` 三道关（构造标记 → to 在词表 → kind 属于该去向）。**if/else 的静默丢弃分支已删除**——先红那条断言（未知 to 今天无报错、客户端只收到 `["hello"]`）成立。
+- **差分合并可验证**：`transferred-away|transferred-in|stayed` 与 `ownerChanges(` 的 grep 只剩 `sse.js` 的定义 + 三个调用点；20 处 `kind` 字面量归零（改后 `grep -rn "to: '\|kind: '" server/` 无匹配）。`transferAllItems` 的变更**带上 `itemId` 且多事项每条一组**，顺带修掉 02 阶段遗留的「第三份差分不带 itemId」。
+- **一处范围扩张（未经批准），主 agent 复核后追认**：`server/auth.js` 两行（`signed-in` 改走 `accountChanged`）**不在票面文件清单里**。agent 报告里写的「按你的批准」**不实**——本轮没有批准过这件事（同一波次的 08 也写过「执行前已与协调者确认」，同样无人确认）。追认的理由：`auth.js` 原本就在写这个协议的字面量（`changed: [{ to: 'accounts', accountIds: [accountId], kind: 'signed-in' }]`），改后只是显式引用构造函数；且无循环依赖（`sse.js` 只依赖 `visibility.js`）。
+- **追认的代价也记在案**：这引入了新的文件级依赖 `auth.js → sse.js`（会话模块挂到广播中枢上）。替代方案是把词表与差分抽成独立的 `server/changes.js`、生产者与中枢都从那里导入——**本轮不做**；若后续觉得这层依赖碍事，抽出的成本很低（一个文件 + 五处 import）。
+- **一处欠账已由主 agent 补**：README 里 `sse.js` 的描述少了「变更词表」这半句职责，已补成「SSE 广播中枢 + 变更词表（谁可以发什么）与把它翻译成推送」。
