@@ -4,7 +4,7 @@
 
 **Blocked by:** 01（变更构造函数）、02（同碰 `items.js`，串行）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 ## 形状
 
@@ -96,3 +96,10 @@ version before= 1 after= 1
 
 **改动**：`server/items.js`（新 API `detachOwner`、`deleteSoleOwnedItems` 改为报告两件事、两处 import 与注释）、`server/accounts.js`（`deleteAccount` 组合两批事实、产出逐条 items 变更、并集定向通知）、`test/account-delete-owners.test.js`（新，7 条）、`test/accounts.test.js` 与 `test/item-gate.test.js`（各一条既有断言随契约更新）。
 
+
+## 主 agent 核对（2026-09-18）
+
+- **提交范围**：`0cdf366`，6 个文件。一处**已声明的偏差**：`test/item-gate.test.js` 改了一行（`.deleted` 的返回形状被本票扩展，不改无法全绿）——我认可，属于契约随实现更新的正常连带。工作区干净，全量套件 **300 项全绿**（293 + 本票 7）。
+- **新 API 我读过实现**：`items.detachOwner(accountId)` → `[{ itemId, ownerIds }]`，在账号行删除**之前**摘成员行并推进 `version` / `updated_at`（行一删，「原来在哪些名单里、剩下谁」就查不到）——这个顺序是对的。SQL 按 `m.account_id` 查并 JOIN items 取 `archived_at IS NULL AS active`，正是「已归档的共享事项只摘名单、不推版本、不产出变更」所依据的那一位。那条设计选择我认可：已归档事项无写路径、无人可见，而 `adminsChanged('accounts')` 已让 admin 重拉归档视图。
+- **先红后绿成立**：未改 server 时新测试 6 条里 5 红（收件人为空、缺 `itemOwners` 两路、`version` **1 !== 2**、`detachOwner is not a function`、邀请收件人那一路缺失）。
+- **02 留给它的那条观察已顺带覆盖**（不是另开票）：`deleteSoleOwnedItems` 现在返回 `{ deleted, orphanedInvitees }`，在删除**前**问出挂在被删事项上的待邀请人（**可能是别人发出的邀请**，`pendingInviteesFrom(账号)` 按 `invited_by` 覆盖不到），与账号自己发出的那批并成一条 `accountChanged(..., 'invites-changed')`。断言：`lin` 的角标 1 → 0 且收到 `self/invites-changed`，而事前 `pendingInviteesFrom(zhao)` 为空——证明覆盖的确实是「别人替它的事项发出的邀请」那一路。`items.js` 里 `item_invites` 的 SQL 仍一行没多，依赖方向不变。
