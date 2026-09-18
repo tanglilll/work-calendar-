@@ -90,15 +90,18 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent-soft
 .topbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap; /* 宽度不足时整块折行，而不是把文字逐字拆开 */
   gap: 16px;
   padding: 10px 16px;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
+/* 顶栏的每一块都不许在内部断行，也不许被压扁；宽度不够时由上一行的 flex-wrap 整块挪下去 */
+.topbar > * { flex-shrink: 0; white-space: nowrap; }
 .brand { font-weight: 700; font-size: 16px; }
 .month-nav { display: flex; align-items: center; gap: 6px; }
 .month-label { min-width: 110px; text-align: center; font-weight: 600; }
-.topbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.topbar-right { margin-left: auto; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .whoami { color: var(--muted); font-size: 13px; }
 
 /* 待接受邀请的入口与角标 */
