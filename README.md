@@ -83,7 +83,8 @@ server/
   invites.js    邀请：发起 / 待接受列表 / 接受 / 拒绝
   accounts.js   账号与注册申请、bootstrap admin
   colors.js     颜色分配
-  sse.js        SSE 广播中枢 + 变更词表（谁可以发什么）与把它翻译成推送
+  changes.js    变更词表：四种去向（谁收 / 谁断）、构造函数、owner 差分
+  sse.js        SSE 广播中枢：连接表、心跳，把变更翻译成推送（投递策略的唯一入口）
   visibility.js 可见性判据：谁能看见/处置哪些事项（全应用唯一一处）
   ratelimit.js  登录限速（时钟可注入）
   config.js     常量与纯工具

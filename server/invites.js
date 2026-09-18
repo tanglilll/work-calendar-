@@ -8,7 +8,7 @@
  * 「能不能给这条事项发邀请」不在这里判：那是 items.js 的门
  * （requireItemAccess(actor, itemId, 'invite')），访问与归档一起管。
  */
-import { accountChanged, ownerChanges } from './sse.js';
+import { accountChanged, ownerChanges } from './changes.js';
 import { httpError } from './http.js';
 
 export function createInvites(store, items) {

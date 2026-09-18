@@ -6,13 +6,13 @@
  * 它同时管访问与「已归档」这件事，invites 也走它——两边不再各判一遍。
  *
  * owner 是一个名单（见 docs/adr/0002）：成员并列、无主次。
- * 变更描述由 sse.js 的词表构造函数产生——这个 module 不自己拼 to/kind。
+ * 变更描述由 changes.js 的词表构造函数产生——这个 module 不自己拼 to/kind。
  *
  * store 与 colors 由组合根注入 —— 这个 module 不再自己创建数据库连接。
  */
 import { LIMITS, isValidDateString, isTagAllowed, TAGS } from './config.js';
 import { canAccessItem, capabilitiesOf, ownerScope } from './visibility.js';
-import { ownerChanged, ownerChanges } from './sse.js';
+import { ownerChanged, ownerChanges } from './changes.js';
 import { httpError } from './http.js';
 
 const ITEM_COLUMNS = `
@@ -162,7 +162,7 @@ export function createItems(store, colors) {
 
   const ownerIdsOf = (item) => item.owners.map((o) => o.id);
 
-  // 变更描述由 sse.js 的词表构造函数产生（ownerChanged / ownerChanges）：领域层只说
+  // 变更描述由 changes.js 的词表构造函数产生（ownerChanged / ownerChanges）：领域层只说
   // 「这条事项的名单出了什么事、影响谁」，怎么送达由适配层决定。
   // 写操作一律返回 { item, changed }，routes 拿到后交给 sse.publish。
 
@@ -369,7 +369,7 @@ export function createItems(store, colors) {
       return getItem(id);
     });
 
-    // 名单变了要说清谁进了谁出了：差分与「谁需要被通知」只有 sse.js 一处实现
+    // 名单变了要说清谁进了谁出了：差分与「谁需要被通知」只有 changes.js 一处实现
     // （invites.accept 与 accounts.transferItems 调的是同一个 ownerChanges）
     const changed = ownerChanges({
       itemId: id,

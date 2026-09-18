@@ -12,7 +12,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { freshWorld, draft } from '../test-helpers/world.js';
-import { createSse, adminsChanged, ownerChanged } from '../server/sse.js';
+import { createSse } from '../server/sse.js';
+import { adminsChanged, ownerChanged } from '../server/changes.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 

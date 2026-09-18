@@ -8,7 +8,7 @@
  */
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { LIMITS } from './config.js';
-import { accountChanged } from './sse.js';
+import { accountChanged } from './changes.js';
 
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
 const COOKIE_NAME = 'rili_session';

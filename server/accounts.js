@@ -11,7 +11,7 @@
 import { hashPassword } from './auth.js';
 import { LIMITS } from './config.js';
 import { ROLES } from './visibility.js';
-import { accountChanged, accountDeleted, adminsChanged, ownerChanges } from './sse.js';
+import { accountChanged, accountDeleted, adminsChanged, ownerChanges } from './changes.js';
 import { httpError } from './http.js';
 
 const USERNAME_RE = /^[\p{L}\p{N}_.-]+$/u;

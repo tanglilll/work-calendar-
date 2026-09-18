@@ -22,10 +22,10 @@ import {
   accountChanged,
   accountDeleted,
   adminsChanged,
-  createSse,
   isChange,
   ownerChanged,
-} from '../server/sse.js';
+} from '../server/changes.js';
+import { createSse } from '../server/sse.js';
 
 const sourceOf = (file) => readFileSync(new URL(`../server/${file}`, import.meta.url), 'utf8');
 

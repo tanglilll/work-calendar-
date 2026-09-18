@@ -7,7 +7,7 @@
  * 这个文件钉住三件事：
  *
  * - 非法变更无从构造：kind 不在词表里，构造函数直接抛；手写的变更描述进不了 publish；
- * - 谁需要被通知只算一次：owner 差分只有 sse.js 一处实现，三个调用点产出同一形状；
+ * - 谁需要被通知只算一次：owner 差分只有 changes.js 一处实现，三个调用点产出同一形状；
  * - 领域 module 不再写回 to/kind 字面量（静态检查，见 contracts.test.js 的先例）。
  *
  * 写法的取舍：能跑真代码的就跑真代码（真中枢 + 桩连接、真领域调用、真 SQL），
@@ -22,12 +22,12 @@ import {
   CHANGE_KINDS,
   accountChanged,
   adminsChanged,
-  createSse,
   isChange,
   ownerChanged,
   ownerChanges,
   ownerDiff,
-} from '../server/sse.js';
+} from '../server/changes.js';
+import { createSse } from '../server/sse.js';
 
 const sourceOf = (file) => readFileSync(new URL(`../server/${file}`, import.meta.url), 'utf8');
 
@@ -253,17 +253,17 @@ describe('owner 差分只有一处实现', () => {
   test('领域 module 不再写回 to/kind 字面量，也不自己算差分', () => {
     for (const file of ['items.js', 'invites.js', 'accounts.js', 'auth.js']) {
       const src = sourceOf(file);
-      assert.match(src, /from '\.\/sse\.js'/, `${file}: 变更描述应当来自词表（sse.js）`);
+      assert.match(src, /from '\.\/changes\.js'/, `${file}: 变更描述应当来自词表（changes.js）`);
       assert.doesNotMatch(src, /\bto:\s*['"]/, `${file}: 去向只能由词表构造函数写`);
       assert.doesNotMatch(src, /\bkind:\s*['"]/, `${file}: kind 只能由词表构造函数写`);
       assert.doesNotMatch(
         src,
         /transferred-(away|in)/,
-        `${file}: 谁进谁出只有 sse.js 的 ownerChanges 一处实现`,
+        `${file}: 谁进谁出只有 changes.js 的 ownerChanges 一处实现`,
       );
-      assert.doesNotMatch(src, /\bstayed\b/, `${file}: 「谁留下」只有 sse.js 一处实现`);
+      assert.doesNotMatch(src, /\bstayed\b/, `${file}: 「谁留下」只有 changes.js 一处实现`);
     }
-    assert.match(sourceOf('sse.js'), /transferred-away/, '词表自己当然有这三个词');
+    assert.match(sourceOf('changes.js'), /transferred-away/, '词表自己当然有这三个词');
   });
 });
 
@@ -306,5 +306,40 @@ describe('accounts.transferItems：变更带上 itemId', () => {
     );
     assert.equal(app.items.getItem(item.id).owners.length, 1, '名单里只剩 admin，没有重复');
     app.close();
+  });
+});
+
+describe('依赖方向：词表与中枢分开', () => {
+  test('sse.js 不再导出词表与构造函数 —— 投递层不知道有哪些词', async () => {
+    const sseModule = await import('../server/sse.js');
+    assert.deepEqual(
+      Object.keys(sseModule).sort(),
+      ['createSse'],
+      'sse.js 的导出面只剩中枢：词表、构造函数与差分都搬到 changes.js 了',
+    );
+
+    const src = sourceOf('sse.js');
+    for (const name of [
+      'CHANGE_KINDS',
+      'ownerChanged',
+      'adminsChanged',
+      'accountChanged',
+      'accountDeleted',
+      'isChange',
+      'ownerDiff',
+      'ownerChanges',
+    ]) {
+      assert.doesNotMatch(
+        src,
+        new RegExp(`export\\s+(?:const|function)\\s+${name}\\b`),
+        `sse.js 里不该再有 ${name} 的定义（它属于 changes.js）`,
+      );
+    }
+  });
+
+  test('auth.js 的 import 里没有 sse.js —— 会话模块不挂到投递层上', () => {
+    const src = sourceOf('auth.js');
+    assert.doesNotMatch(src, /from '\.\/sse\.js'/, 'auth.js 不该 import 广播中枢');
+    assert.match(src, /from '\.\/changes\.js'/, 'auth.js 的变更构造来自 changes.js');
   });
 });
