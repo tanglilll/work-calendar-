@@ -11,3 +11,7 @@ Default label vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `read
 ### Domain docs
 
 Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Environment
+
+Host/network facts that tests can't catch (start services as detached processes, CDN reachability, `node:sqlite` null-prototype rows, GitHub needs the local proxy). See `docs/agents/environment.md`.
