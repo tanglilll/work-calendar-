@@ -7,6 +7,8 @@ export function openAdminDialog(dialog, ctx) {
   const { me, palette, roles, onDone } = ctx;
   if (dialog.open) dialog.close();
   let tab = 'requests';
+  // 转移视图：非空时 body 渲染候选账号列表（见 renderTransfer），点选或取消后清空、回到账号列表
+  let transferFrom = null;
 
   dialog.innerHTML = `
     <div class="dialog-head">
@@ -28,10 +30,12 @@ export function openAdminDialog(dialog, ctx) {
     });
     body.innerHTML = '<p class="panel-empty">加载中…</p>';
     try {
-      if (tab === 'requests') await renderRequests();
+      if (transferFrom !== null) await renderTransfer();
+      else if (tab === 'requests') await renderRequests();
       else if (tab === 'accounts') await renderAccounts();
       else await renderArchive();
     } catch (err) {
+      transferFrom = null;
       body.innerHTML = `<p class="form-msg" data-kind="error">${esc(err.message)}</p>`;
     }
   }
@@ -120,6 +124,12 @@ export function openAdminDialog(dialog, ctx) {
     }
     if (el.dataset.tab) {
       tab = el.dataset.tab;
+      transferFrom = null;
+      await render();
+      return;
+    }
+    if (el.dataset.act === 'cancel-transfer') {
+      transferFrom = null;
       await render();
       return;
     }
@@ -142,7 +152,14 @@ export function openAdminDialog(dialog, ctx) {
         await render();
         onDone();
       } else if (el.dataset.transfer) {
-        await doTransfer(Number(el.dataset.transfer));
+        transferFrom = Number(el.dataset.transfer);
+        await render();
+      } else if (el.dataset.transferTo) {
+        const res = await api.transferItems(transferFrom, Number(el.dataset.transferTo));
+        toast(`已转移 ${res.moved} 条事项给 ${el.dataset.username}`);
+        transferFrom = null;
+        await render();
+        onDone();
       } else if (el.dataset.del) {
         await doDelete(Number(el.dataset.del));
       }
@@ -154,25 +171,43 @@ export function openAdminDialog(dialog, ctx) {
   // 同 itemform.js：监听器按「这一次打开」注册，下次打开整体解除
   bindDialogForThisOpen(dialog, { click: onAction });
 
-  async function doTransfer(fromId) {
+  /**
+   * 转移视图：候选账号列成一列可点条目，取代原先的 prompt()——它在部分内嵌 webview 里被禁用。
+   * 点选走既有的转移接口；取消（或切到别的 tab）回到账号列表，不做任何改动。
+   */
+  async function renderTransfer() {
+    const fromId = transferFrom;
     const { accounts } = await api.adminAccounts();
+    const from = accounts.find((a) => a.id === fromId);
+    if (!from) {
+      // 面板开着时这个账号在别处被删了：退回账号列表，别停在一个指向不存在账号的视图上
+      transferFrom = null;
+      await render();
+      return;
+    }
     const targets = accounts.filter((a) => a.id !== fromId);
     if (!targets.length) {
-      toast('没有可转移的目标账号', 'error');
+      body.innerHTML = `<p class="panel-empty">没有其他账号可以接收事项。</p>
+        <div class="inline-actions">
+          <button type="button" data-act="cancel-transfer">返回账号列表</button>
+        </div>`;
       return;
     }
-    const list = targets.map((a, i) => `${i + 1}. ${a.username}`).join('\n');
-    const answer = prompt(`把该账号名下的全部事项转移给谁？输入序号：\n\n${list}`);
-    if (answer === null) return;
-    const idx = Number(answer) - 1;
-    if (!Number.isInteger(idx) || idx < 0 || idx >= targets.length) {
-      toast('序号无效', 'error');
-      return;
-    }
-    const res = await api.transferItems(fromId, targets[idx].id);
-    toast(`已转移 ${res.moved} 条事项给 ${targets[idx].username}`);
-    await render();
-    onDone();
+    body.innerHTML = `<table class="data">
+      <thead><tr><th>账号</th><th>未归档事项</th><th>操作</th></tr></thead>
+      <tbody>${targets
+        .map(
+          (a) => `<tr>
+            <td>${esc(a.username)}</td>
+            <td>${a.active_items}</td>
+            <td><button type="button" class="primary" data-transfer-to="${a.id}" data-username="${esc(a.username)}">转移给 TA</button></td>
+          </tr>`,
+        )
+        .join('')}</tbody></table>
+      <p class="hint">把 ${esc(from.username)} 名下的全部事项转给谁？它作为唯一 owner 的未归档事项必须先转走，之后才能删除该账号。点「取消」返回账号列表，不做任何改动。</p>
+      <div class="inline-actions">
+        <button type="button" data-act="cancel-transfer">取消</button>
+      </div>`;
   }
 
   async function doDelete(id) {
