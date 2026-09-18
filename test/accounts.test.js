@@ -150,9 +150,10 @@ describe('deleteAccount', () => {
 
     const { moved, changed } = app.accounts.transferItems(zhao.id, admin.id);
     assert.equal(moved, 1, '已归档的事项也算被转移');
+    // 转移不是一条聚合变更：每条受影响的事项各有一组带 itemId 的差分
     assert.deepEqual(changed, [
-      { to: 'itemOwners', ownerIds: [zhao.id], kind: 'transferred-away' },
-      { to: 'itemOwners', ownerIds: [admin.id], kind: 'transferred-in' },
+      { to: 'itemOwners', ownerIds: [zhao.id], kind: 'transferred-away', itemId: item.id },
+      { to: 'itemOwners', ownerIds: [admin.id], kind: 'transferred-in', itemId: item.id },
       { to: 'admins', kind: 'accounts' },
     ]);
     // 转走之后 zhao 名下再无事项

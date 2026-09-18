@@ -6,6 +6,7 @@
 import { hashPassword } from './auth.js';
 import { LIMITS } from './config.js';
 import { ROLES } from './visibility.js';
+import { accountChanged, adminsChanged, ownerChanges } from './sse.js';
 import { httpError } from './http.js';
 
 const USERNAME_RE = /^[\p{L}\p{N}_.-]+$/u;
@@ -72,7 +73,7 @@ export function createAccounts(store, items) {
       'INSERT INTO registration_requests (username, password_hash, note, created_at) VALUES (?, ?, ?, ?)',
     ).run(u.value, hashPassword(p.value), note, new Date().toISOString());
 
-    return { changed: [{ to: 'admins', kind: 'requests' }] };
+    return { changed: [adminsChanged('requests')] };
   }
 
   /** 待批准申请列表。刻意不返回 password_hash。 */
@@ -101,10 +102,10 @@ export function createAccounts(store, items) {
     return {
       account,
       changed: [
-        { to: 'admins', kind: 'accounts' },
-        { to: 'admins', kind: 'requests' },
+        adminsChanged('accounts'),
+        adminsChanged('requests'),
         // 申请人自己的其它客户端立刻可用
-        { to: 'accounts', accountIds: [account.id], kind: 'approved' },
+        accountChanged([account.id], 'approved'),
       ],
     };
   }
@@ -113,7 +114,7 @@ export function createAccounts(store, items) {
   function rejectRequest(id) {
     const info = db.prepare('DELETE FROM registration_requests WHERE id = ?').run(id);
     if (info.changes === 0) throw httpError(404, '注册申请不存在');
-    return { changed: [{ to: 'admins', kind: 'requests' }] };
+    return { changed: [adminsChanged('requests')] };
   }
 
   /**
@@ -160,9 +161,9 @@ export function createAccounts(store, items) {
     return {
       account: { ...target, role },
       changed: [
-        { to: 'admins', kind: 'accounts' },
+        adminsChanged('accounts'),
         // 角色变了，对方必须重新拉取，越权数据要立刻从他的客户端消失
-        { to: 'accounts', accountIds: [targetId], kind: 'role-changed' },
+        accountChanged([targetId], 'role-changed'),
       ],
     };
   }
@@ -199,7 +200,7 @@ export function createAccounts(store, items) {
       return { ...target, deletedArchivedItems: archived };
     });
 
-    return { removed, changed: [{ to: 'admins', kind: 'accounts' }] };
+    return { removed, changed: [adminsChanged('accounts')] };
   }
 
   /** 把 fromId 名下全部事项转给 toId。 */
@@ -210,15 +211,16 @@ export function createAccounts(store, items) {
     if (!to) throw httpError(404, '目标账号不存在');
     if (from.id === to.id) throw httpError(400, '源账号与目标账号相同');
 
-    const moved = items.transferAllItems(from.id, to.id);
+    // 每条受影响的事项各产生一组差分变更（带上 itemId）：转移不是「一条变更」，
+    // 而是「这批事项的名单都变了」——谁需要被通知由词表的 ownerChanges 算，与另两处同源。
+    const moves = items.transferAllItems(from.id, to.id);
     return {
       from,
       to,
-      moved,
+      moved: moves.length,
       changed: [
-        { to: 'itemOwners', ownerIds: [from.id], kind: 'transferred-away' },
-        { to: 'itemOwners', ownerIds: [to.id], kind: 'transferred-in' },
-        { to: 'admins', kind: 'accounts' },
+        ...moves.flatMap(({ itemId, before, after }) => ownerChanges({ itemId, before, after })),
+        adminsChanged('accounts'),
       ],
     };
   }

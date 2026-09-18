@@ -3,11 +3,13 @@
  * 路由层不自行拼 SQL、不自行比对角色。
  *
  * owner 是一个名单（见 docs/adr/0002）：成员并列、无主次。
+ * 变更描述由 sse.js 的词表构造函数产生——这个 module 不自己拼 to/kind。
  *
  * store 与 colors 由组合根注入 —— 这个 module 不再自己创建数据库连接。
  */
 import { LIMITS, isValidDateString, isTagAllowed, TAGS } from './config.js';
 import { canAccessItem, capabilitiesOf, ownerScope } from './visibility.js';
+import { ownerChanged, ownerChanges } from './sse.js';
 import { httpError } from './http.js';
 
 const ITEM_COLUMNS = `
@@ -134,16 +136,9 @@ export function createItems(store, colors) {
 
   const ownerIdsOf = (item) => item.owners.map((o) => o.id);
 
-  /**
-   * 变更描述：领域层只说「发生了什么、影响谁」，怎么送达由适配层决定。
-   * 写操作一律返回 { item, changed }，routes 拿到后交给 sse.publish。
-   */
-  const ownerChanged = (kind, item) => ({
-    to: 'itemOwners',
-    ownerIds: ownerIdsOf(item),
-    kind,
-    itemId: item.id,
-  });
+  // 变更描述由 sse.js 的词表构造函数产生（ownerChanged / ownerChanges）：领域层只说
+  // 「这条事项的名单出了什么事、影响谁」，怎么送达由适配层决定。
+  // 写操作一律返回 { item, changed }，routes 拿到后交给 sse.publish。
 
   /**
    * 校验并归一化事项输入。requireAll=true 时所有必填字段都必须出现（新建）；
@@ -279,7 +274,7 @@ export function createItems(store, colors) {
       return getItem(id);
     });
 
-    return { item, changed: [ownerChanged('created', item)] };
+    return { item, changed: [ownerChanged(item.id, ownerIdsOf(item), 'created')] };
   }
 
   function updateItem(account, id, input) {
@@ -330,21 +325,13 @@ export function createItems(store, colors) {
       return getItem(id);
     });
 
-    const before = new Set(ownerIdsOf(current));
-    const after = new Set(ownerIdsOf(updated));
-    const removed = [...before].filter((x) => !after.has(x));
-    const added = [...after].filter((x) => !before.has(x));
-    const stayed = [...after].filter((x) => before.has(x));
-
-    // 名单变了要说清谁进了谁出了：只有这里知道这件事
-    const changed = [];
-    if (removed.length || added.length) {
-      if (removed.length) changed.push({ to: 'itemOwners', ownerIds: removed, kind: 'transferred-away', itemId: id });
-      if (added.length) changed.push({ to: 'itemOwners', ownerIds: added, kind: 'transferred-in', itemId: id });
-      if (stayed.length) changed.push({ to: 'itemOwners', ownerIds: stayed, kind: 'updated', itemId: id });
-    } else {
-      changed.push(ownerChanged('updated', updated));
-    }
+    // 名单变了要说清谁进了谁出了：差分与「谁需要被通知」只有 sse.js 一处实现
+    // （invites.accept 与 accounts.transferItems 调的是同一个 ownerChanges）
+    const changed = ownerChanges({
+      itemId: id,
+      before: ownerIdsOf(current),
+      after: ownerIdsOf(updated),
+    });
 
     return { item: updated, changed };
   }
@@ -370,14 +357,14 @@ export function createItems(store, colors) {
       return getItem(id);
     });
 
-    return { item, changed: [ownerChanged('archived', item)] };
+    return { item, changed: [ownerChanged(item.id, ownerIdsOf(item), 'archived')] };
   }
 
   function deleteItem(account, id) {
     const item = requireItemAccess(account, id);
     const info = db.prepare('DELETE FROM items WHERE id = ?').run(id);
     if (info.changes === 0) throw httpError(404, '事项不存在');
-    return { item, changed: [ownerChanged('deleted', item)] };
+    return { item, changed: [ownerChanged(item.id, ownerIdsOf(item), 'deleted')] };
   }
 
   /**
@@ -423,6 +410,9 @@ export function createItems(store, colors) {
   /**
    * 把 fromOwnerId 从它参与的每条事项里换成 toOwnerId。
    * 目标已经是成员时不会重复插入（INSERT OR IGNORE）。
+   *
+   * 返回每条受影响事项的名单差分（{ itemId, before, after }）——这里只提供事实，
+   * 「谁需要被通知」由调用方交给词表的 ownerChanges 算，与另外两处同源。
    */
   function transferAllItems(fromOwnerId, toOwnerId) {
     const affected = db
@@ -433,14 +423,18 @@ export function createItems(store, colors) {
       const add = db.prepare('INSERT OR IGNORE INTO item_owners (item_id, account_id) VALUES (?, ?)');
       const drop = db.prepare('DELETE FROM item_owners WHERE item_id = ? AND account_id = ?');
       const touch = db.prepare('UPDATE items SET version = version + 1, updated_at = ? WHERE id = ?');
+      const owners = db.prepare('SELECT account_id FROM item_owners WHERE item_id = ? ORDER BY account_id ASC');
       const now = new Date().toISOString();
 
+      const moves = [];
       for (const { item_id: itemId } of affected) {
+        const before = owners.all(itemId).map((row) => row.account_id);
         add.run(itemId, toOwnerId);
         drop.run(itemId, fromOwnerId);
         touch.run(now, itemId);
+        moves.push({ itemId, before, after: owners.all(itemId).map((row) => row.account_id) });
       }
-      return affected.length;
+      return moves;
     });
   }
 

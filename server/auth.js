@@ -8,6 +8,7 @@
  */
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { LIMITS } from './config.js';
+import { accountChanged } from './sse.js';
 
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
 const COOKIE_NAME = 'rili_session';
@@ -95,7 +96,7 @@ export function createSessions(store) {
     );
     return {
       token,
-      changed: [{ to: 'accounts', accountIds: [accountId], kind: 'signed-in' }],
+      changed: [accountChanged([accountId], 'signed-in')],
     };
   }
 

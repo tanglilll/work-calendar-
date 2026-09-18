@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { freshWorld, draft } from '../test-helpers/world.js';
-import { createSse } from '../server/sse.js';
+import { createSse, adminsChanged, ownerChanged } from '../server/sse.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -168,7 +168,7 @@ describe('SSE 广播中枢', () => {
     const adminClient = await connect(app, await login(app, 'admin', 'password-1'));
 
     // 事项事件：owner 收到，能看全部事项的 admin 也收到，其他 user 收不到
-    hub.publish([{ to: 'itemOwners', ownerIds: [zhao.id], kind: 'updated', itemId: 42 }]);
+    hub.publish([ownerChanged(42, [zhao.id], 'updated')]);
 
     const itemsPayload = { scope: 'items', ownerId: zhao.id, kind: 'updated', itemId: 42 };
     assert.deepEqual(zhaoClient.events(), [
@@ -186,7 +186,7 @@ describe('SSE 广播中枢', () => {
     );
 
     // admin 事件：只到 admin
-    hub.publish([{ to: 'admins', kind: 'accounts' }]);
+    hub.publish([adminsChanged('accounts')]);
     assert.deepEqual(adminClient.events().at(-1), { event: 'admin', data: { scope: 'admin', kind: 'accounts' } });
     assert.deepEqual(linClient.events().map((e) => e.event), ['hello'], 'user 收不到 admin 事件');
 
@@ -201,7 +201,7 @@ describe('SSE 广播中枢', () => {
     // 断开连接后再 publish，不再写给它
     const before = zhaoClient.events().length;
     zhaoClient.emit('close');
-    hub.publish([{ to: 'itemOwners', ownerIds: [zhao.id], kind: 'deleted', itemId: 43 }]);
+    hub.publish([ownerChanged(43, [zhao.id], 'deleted')]);
     assert.equal(zhaoClient.events().length, before, 'close 之后该客户端已被移出连接表');
     assert.equal(adminClient.events().at(-1).data.kind, 'deleted', '其余连接照常收到');
 
@@ -216,7 +216,7 @@ describe('SSE 广播中枢', () => {
     hub.closeAll();
     assert.equal(client.ended, true, 'closeAll 应当结束连接');
 
-    hub.publish([{ to: 'itemOwners', ownerIds: [7], kind: 'updated', itemId: 1 }]);
+    hub.publish([ownerChanged(1, [7], 'updated')]);
     assert.deepEqual(
       client.events().map((e) => e.event),
       ['hello'],

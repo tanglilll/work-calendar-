@@ -6,6 +6,7 @@
  * 管理员直接改名单不走这里，那是分派，不是协商（见 docs/adr/0002）。
  */
 import { canAccessItem } from './visibility.js';
+import { accountChanged, ownerChanges } from './sse.js';
 import { httpError } from './http.js';
 
 export function createInvites(store, items) {
@@ -42,7 +43,7 @@ export function createInvites(store, items) {
         invited_by: actor.id,
       },
       // 被邀请人的角标要立刻动
-      changed: [{ to: 'accounts', accountIds: [targetId], kind: 'invites-changed' }],
+      changed: [accountChanged([targetId], 'invites-changed')],
     };
   }
 
@@ -86,14 +87,12 @@ export function createInvites(store, items) {
       return items.getItem(row.item_id);
     });
 
-    const others = item.owners.filter((o) => o.id !== account.id).map((o) => o.id);
+    // 接受 = 名单里多了一个人：差分与「谁需要被通知」走词表那一处实现
+    const before = item.owners.filter((o) => o.id !== account.id).map((o) => o.id);
     const changed = [
-      { to: 'accounts', accountIds: [account.id], kind: 'invites-changed' },
-      { to: 'itemOwners', ownerIds: [account.id], kind: 'transferred-in', itemId: item.id },
+      accountChanged([account.id], 'invites-changed'),
+      ...ownerChanges({ itemId: item.id, before, after: item.owners.map((o) => o.id) }),
     ];
-    if (others.length) {
-      changed.push({ to: 'itemOwners', ownerIds: others, kind: 'updated', itemId: item.id });
-    }
 
     return { item, changed };
   }
@@ -105,7 +104,7 @@ export function createInvites(store, items) {
   function reject(inviteId, account) {
     const row = requireMine(inviteId, account);
     db.prepare('DELETE FROM item_invites WHERE id = ?').run(row.id);
-    return { changed: [{ to: 'accounts', accountIds: [account.id], kind: 'invites-changed' }] };
+    return { changed: [accountChanged([account.id], 'invites-changed')] };
   }
 
   return { invite, listFor, countFor, accept, reject };
