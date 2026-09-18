@@ -2,7 +2,9 @@
  * 账号与注册申请。账号只在「批准」那一刻诞生；申请表里存的密码已经是哈希。
  *
  * store、items 与 invites 由组合根注入：删账号前要数它名下的事项，也要问出
- * 它发出的待接受邀请都发给了谁（那些人要收到定向通知）。两个领域依赖都是显式的。
+ * 它发出的、以及挂在被删事项上的待接受邀请都发给了谁（那些人要收到定向通知）；
+ * 共享事项的名单摘除与 version 推进走 items（名单与事项表都归那个 module）。
+ * 两个领域依赖都是显式的。
  *
  * 会话表的写入归 auth（auth.js 的 createSessions）：这里不删会话——
  * 账号行删除后由 sessions.account_id 的 ON DELETE CASCADE 接手
@@ -11,7 +13,7 @@
 import { hashPassword } from './auth.js';
 import { LIMITS } from './config.js';
 import { ROLES } from './visibility.js';
-import { accountChanged, accountDeleted, adminsChanged, ownerChanges } from './changes.js';
+import { accountChanged, accountDeleted, adminsChanged, ownerChanged, ownerChanges } from './changes.js';
 import { httpError } from './http.js';
 
 const USERNAME_RE = /^[\p{L}\p{N}_.-]+$/u;
@@ -184,8 +186,11 @@ export function createAccounts(store, items, invites) {
 
   /**
    * 删除账号。要求「它是唯一 owner」的未归档事项为零（那些必须先转移）；
-   * 与别人共享的事项只是把它从 owner 名单里摘掉（外键级联），事项本身留着。
-   * 已归档且只属于它的事项随账号一并删除，数量在返回值里告知。
+   * 与别人共享的事项只是把它从 owner 名单里摘掉，事项本身留着 —— 摘除与 version
+   * 推进交给 items.detachOwner（名单与 version 都归那张表），剩下的人各收一条带
+   * itemId 的 items 变更；否则他们的窗口停在旧名单，手里的过期编辑框也撞不上版本冲突。
+   * 已归档且只属于它的事项随账号一并删除，数量在返回值里告知；
+   * 挂在这些事项上的待接受邀请也随级联消失，收件人一并定向通知。
    * 会话随账号级联消失（见文件头）：不在这里写 sessions。
    */
   function deleteAccount(actorId, targetId) {
@@ -209,19 +214,31 @@ export function createAccounts(store, items, invites) {
     const archived = items.countSoleOwnedArchivedItems(target.id);
     // 它发出的待接受邀请也随它级联消失：被邀请人不是 admin，得单独告诉一声，
     // 否则他们的角标要等下一次全量重拉才准（删除前问，删除后就查不到了）
-    const orphanedInvitees = invites.pendingInviteesFrom(target.id);
+    const inviteesOfItsInvites = invites.pendingInviteesFrom(target.id);
 
-    const removed = tx(() => {
-      items.deleteSoleOwnedItems(target.id);
+    const { detachments, inviteesOfDeletedItems } = tx(() => {
+      // 顺序有讲究：先给仍然有效的共享事项摘名单并推进 version（账号行一删，
+      // 「它原来在哪些名单里、剩下谁」就查不到了），再删「唯一 owner 的已归档事项」
+      // （挂在它们上面的待邀请人在这一步报出来），最后删账号行。
+      const detached = items.detachOwner(target.id);
+      const soleOwned = items.deleteSoleOwnedItems(target.id);
       db.prepare('DELETE FROM accounts WHERE id = ?').run(target.id);
-      return { ...target, deletedArchivedItems: archived };
+      return { detachments: detached, inviteesOfDeletedItems: soleOwned.orphanedInvitees };
     });
 
+    // 两批被邀请人合成一条定向通知（同一批人不重复出现）：前者是它发出的邀请，
+    // 后者挂在被它连累删除的事项上——可能是别人（如 admin）替它的事件事发的
+    const orphanedInvitees = [...new Set([...inviteesOfItsInvites, ...inviteesOfDeletedItems])].sort(
+      (a, b) => a - b,
+    );
+
     return {
-      removed,
+      removed: { ...target, deletedArchivedItems: archived },
       // 账号没了，它的连接立刻断开（走词表的 connections 去向）；
-      // admin 面板再各自刷新名单；被它连累的邀请收件人各收一条定向通知。
+      // admin 面板再各自刷新名单；受级联影响的人各收自己那一路定向通知。
       changed: [
+        // 每条受影响的共享事项各一条（带 itemId）：剩下的人要重拉，过期编辑框要撞 409
+        ...detachments.map(({ itemId, ownerIds }) => ownerChanged(itemId, ownerIds, 'updated')),
         accountDeleted(target.id),
         adminsChanged('accounts'),
         ...(orphanedInvitees.length ? [accountChanged(orphanedInvitees, 'invites-changed')] : []),

@@ -236,6 +236,8 @@ describe('删账号的连带后果：会话与邀请', () => {
     assert.deepEqual(
       changed,
       [
+        // 共享事项的名单少了一个人：剩下的人要重拉，过期编辑框要撞 409（工单 03）
+        { to: 'itemOwners', ownerIds: [admin.id], kind: 'updated', itemId: item.id },
         { to: 'connections', accountIds: [zhao.id], kind: 'account-deleted' },
         { to: 'admins', kind: 'accounts' },
         // 不是 admin 的人是这条邀请的收件人：他的角标要立刻准，而不是等下一次全量

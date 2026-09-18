@@ -302,7 +302,7 @@ describe('sole-owner：三条路径一份实现', () => {
     assert.equal(app.items.countSoleOwnedActiveItems(zhao.id), expectedActive.length);
     assert.equal(app.items.countSoleOwnedArchivedItems(zhao.id), expectedArchived.length);
     assert.equal(
-      app.items.deleteSoleOwnedItems(zhao.id),
+      app.items.deleteSoleOwnedItems(zhao.id).deleted,
       expectedActive.length + expectedArchived.length,
       '删掉的是「唯一 owner」的并集：未归档与已归档都算',
     );

@@ -10,7 +10,8 @@
  *
  * store 与 colors 由组合根注入 —— 这个 module 不再自己创建数据库连接。
  * 「某条事项的待邀请人」同样由组合根注入（pendingInviteesOf）：那张表归 invites.js，
- * 而 invites 已经依赖 items，所以 items 反过来读它就会成环（见 deleteItem）。
+ * 而 invites 已经依赖 items，所以 items 反过来读它就会成环
+ * （见 deleteItem 与 deleteSoleOwnedItems 两处删除路径）。
  */
 import { LIMITS, isValidDateString, isTagAllowed, TAGS } from './config.js';
 import { canAccessItem, capabilitiesOf, ownerScope } from './visibility.js';
@@ -466,11 +467,97 @@ export function createItems(store, colors, { pendingInviteesOf } = {}) {
     return db.prepare(`SELECT COUNT(*) AS n FROM items i WHERE ${soleOwnedWhere(true)}`).get(accountId).n;
   }
 
-  /** 删掉某账号是唯一 owner 的全部事项（含已归档）。共享事项由外键级联摘除成员。 */
+  /**
+   * 删掉某账号是唯一 owner 的全部事项（门槛过后实际只剩已归档的那些），
+   * 并把这次删除连带的两件事都报出来：
+   * - deleted：删了几条；
+   * - orphanedInvitees：这些事项的待接受邀请随 item_id 级联消失，收件人是谁。
+   *
+   * 为什么要报收件人：邀请可能是**任何人**发出的（例如 admin 替它的事件事邀请的
+   * lin），所以「它发出的邀请」那个读法（invites.pendingInviteesFrom）覆盖不到这一
+   * 类；而这些邀请确实随事项一起没了，被邀请人的角标必须当场归零，而不是等下一次
+   * 全量重拉。问法复用注入的 pendingInviteesOf（表与查询归 invites.js），
+   * 并且必须在删除**前**问——删掉之后 item_invites 里就查不到了。
+   *
+   * 事务由调用方负责（唯一调用点是 deleteAccount 的 tx）。
+   */
   function deleteSoleOwnedItems(accountId) {
-    return db
-      .prepare(`DELETE FROM items WHERE id IN (SELECT i.id FROM items i WHERE ${soleOwnedWhere()})`)
-      .run(accountId).changes;
+    const ids = db
+      .prepare(`SELECT i.id FROM items i WHERE ${soleOwnedWhere()}`)
+      .all(accountId)
+      .map((row) => row.id);
+    const orphanedInvitees = [...new Set(ids.flatMap((itemId) => pendingInviteesOf(itemId)))].sort(
+      (a, b) => a - b,
+    );
+    const deleted = ids.length
+      ? db.prepare(`DELETE FROM items WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids).changes
+      : 0;
+    return { deleted, orphanedInvitees };
+  }
+
+  /**
+   * 把某个账号从它参与的每一条事项的名单里摘掉（真的删 item_owners 行），
+   * 并推进**仍然有效**的那些事项的 version。
+   *
+   * 为什么需要它：删账号时名单是靠外键级联摘掉的——名单变了、version 没变。
+   * 两条后果：别人的窗口里那些色块的归属文案停在旧名单；谁手里正好开着编辑框，
+   * 保存时不会撞版本冲突（版本没变），一存就把「被删账号已不在名单」写了回去。
+   * 名单与 version 都在这个 module 的表里，所以摘除与推进都归这里，而且必须在
+   * 账号行删除**之前**做：行一删，「它原来在哪些名单里、剩下谁」就查不到了。
+   *
+   * 返回仍然有效的那几条 `{ itemId, ownerIds }`——ownerIds 是摘掉它之后剩下的名单
+   * （升序）。这里只提供事实，「谁需要被通知、用哪种 kind」由调用方交给词表的
+   * ownerChanged 说，与 transferAllItems 同一分工。
+   *
+   * 三类刻意不在返回里：
+   * - 已归档的事项只摘名单，不推进 version、不通知：它们没有编辑路径（门拒绝 write），
+   *   也不出现在任何人的窗口里（归档视图由 admin 按需打开，名单自然是新的）；
+   * - 唯一 owner 的未归档事项直接抛错：那是 deleteAccount 的门槛要求先转移的状态，
+   *   走到这里说明守卫被绕过了，不能默默留下一条没有 owner、只剩 manager/admin
+   *   看得见的事项；
+   * - 唯一 owner 的已归档事项留给 deleteSoleOwnedItems 整条删除（调用方紧接着调它）。
+   *
+   * 事务由调用方负责（唯一调用点是 deleteAccount 的 tx）：摘除与账号行的删除
+   * 必须同生共死。
+   */
+  function detachOwner(accountId) {
+    const rows = db
+      .prepare(
+        `SELECT m.item_id AS itemId, i.archived_at IS NULL AS active
+           FROM item_owners m JOIN items i ON i.id = m.item_id
+          WHERE m.account_id = ?
+          ORDER BY m.item_id ASC`,
+      )
+      .all(accountId);
+    const ownersOf = db.prepare(
+      'SELECT account_id FROM item_owners WHERE item_id = ? ORDER BY account_id ASC',
+    );
+
+    // 先算清每条事项摘掉它之后剩谁，不变量不成立就在写任何一行之前抛错：
+    // 即使调用方忘了包事务，也不会留下一半被摘的名单。
+    const plan = rows.map(({ itemId, active }) => ({
+      itemId,
+      active,
+      ownerIds: ownersOf.all(itemId).map((row) => row.account_id).filter((id) => id !== accountId),
+    }));
+    const orphan = plan.find((entry) => !entry.ownerIds.length && entry.active);
+    if (orphan) {
+      throw new Error(`账号 ${accountId} 是事项 ${orphan.itemId} 的唯一 owner：删账号前必须先转移`);
+    }
+
+    const drop = db.prepare('DELETE FROM item_owners WHERE item_id = ? AND account_id = ?');
+    const touch = db.prepare('UPDATE items SET version = version + 1, updated_at = ? WHERE id = ?');
+    const now = new Date().toISOString();
+
+    const detached = [];
+    for (const { itemId, active, ownerIds } of plan) {
+      if (!ownerIds.length) continue; // 唯一 owner 的已归档事项：由 deleteSoleOwnedItems 整条删除
+      drop.run(itemId, accountId);
+      if (!active) continue; // 已归档：只摘名单，版本与通知都不动
+      touch.run(now, itemId);
+      detached.push({ itemId, ownerIds });
+    }
+    return detached;
   }
 
   /**
@@ -517,6 +604,7 @@ export function createItems(store, colors, { pendingInviteesOf } = {}) {
     countSoleOwnedActiveItems,
     countSoleOwnedArchivedItems,
     deleteSoleOwnedItems,
+    detachOwner,
     transferAllItems,
   };
 }
