@@ -3,14 +3,14 @@
  *
  * 分工：
  * - 鉴权与可见性判据在 visibility.js；
- * - 广播策略由领域操作的返回值描述（changed），这里只交给 sse.publish 送达；
+ * - 广播策略由领域操作的返回值描述（changed），这里只交给注入进来的中枢送达；
  * - 登录限速在 ratelimit.js；
- * - 领域 module 由组合根注入 —— 这里不 import 任何具体实现，因此测试可以接替身。
+ * - 领域 module 与广播中枢都由组合根注入 —— 这里不 import 任何具体实现，
+ *   因此测试可以接替身，两个组合根也不会共用一套连接表。
  * 所以这个文件里只剩下「路径匹配 + 读入参 + 写响应」三件事。
  */
 import { sendJson, readJson, httpError } from './http.js';
 import { readSessionToken, sessionCookie, clearSessionCookie, verifyPassword } from './auth.js';
-import { addClient, publish } from './sse.js';
 import { TAGS, PALETTE, LIMITS, todayLocal } from './config.js';
 import { capabilitiesOf, ROLES } from './visibility.js';
 import { createLoginRateLimiter } from './ratelimit.js';
@@ -32,7 +32,7 @@ function requireAdmin(account) {
   return account;
 }
 
-export function createApi({ items, accounts, sessions, invites }) {
+export function createApi({ items, accounts, sessions, invites, sse }) {
   const checkLoginRate = createLoginRateLimiter();
 
   // ——————————————— 公开路由 ———————————————
@@ -57,7 +57,7 @@ export function createApi({ items, accounts, sessions, invites }) {
 
   async function handleRegisterRequest(req, res) {
     const { changed } = accounts.submitRegistrationRequest(await readJson(req));
-    publish(changed);
+    sse.publish(changed);
     return sendJson(res, 201, { ok: true });
   }
 
@@ -73,7 +73,7 @@ export function createApi({ items, accounts, sessions, invites }) {
     }
 
     const { token, changed } = sessions.createSession(found.id);
-    publish(changed);
+    sse.publish(changed);
     return sendJson(
       res,
       200,
@@ -90,7 +90,7 @@ export function createApi({ items, accounts, sessions, invites }) {
   // ——————————————— 以下均需登录 ———————————————
 
   function handleEvents(res, me) {
-    addClient(res, me);
+    sse.addClient(res, me);
     return undefined; // 连接保持打开，不写响应
   }
 
@@ -102,7 +102,7 @@ export function createApi({ items, accounts, sessions, invites }) {
 
   async function handleCreateItem(req, res, me) {
     const { item, changed } = items.createItem(me, await readJson(req));
-    publish(changed);
+    sse.publish(changed);
     return sendJson(res, 201, { item });
   }
 
@@ -114,20 +114,20 @@ export function createApi({ items, accounts, sessions, invites }) {
 
   async function handleUpdateItem(req, res, me, id) {
     const { item, changed } = items.updateItem(me, id, await readJson(req));
-    publish(changed);
+    sse.publish(changed);
     return sendJson(res, 200, { item });
   }
 
   function handleDeleteItem(res, me, id) {
     const { changed } = items.deleteItem(me, id);
-    publish(changed);
+    sse.publish(changed);
     return sendJson(res, 200, { ok: true });
   }
 
   async function handleArchiveItem(req, res, me, id) {
     const body = await readJson(req);
     const { item, changed } = items.archiveItem(me, id, body.version);
-    publish(changed);
+    sse.publish(changed);
     return sendJson(res, 200, { item });
   }
 
@@ -140,19 +140,19 @@ export function createApi({ items, accounts, sessions, invites }) {
   async function handleCreateInvite(req, res, me, itemId) {
     const body = await readJson(req);
     const { invite, changed } = invites.invite(itemId, body.account_id, me);
-    publish(changed);
+    sse.publish(changed);
     return sendJson(res, 201, { invite });
   }
 
   function handleAcceptInvite(res, me, inviteId) {
     const { item, changed } = invites.accept(inviteId, me);
-    publish(changed);
+    sse.publish(changed);
     return sendJson(res, 200, { item });
   }
 
   function handleRejectInvite(res, me, inviteId) {
     const { changed } = invites.reject(inviteId, me);
-    publish(changed);
+    sse.publish(changed);
     return sendJson(res, 200, { ok: true });
   }
 
@@ -167,11 +167,11 @@ export function createApi({ items, accounts, sessions, invites }) {
     requireAdmin(me);
     if (action === 'approve') {
       const { account, changed } = accounts.approveRequest(id);
-      publish(changed);
+      sse.publish(changed);
       return sendJson(res, 200, { account });
     }
     const { changed } = accounts.rejectRequest(id);
-    publish(changed);
+    sse.publish(changed);
     return sendJson(res, 200, { ok: true });
   }
 
@@ -184,14 +184,14 @@ export function createApi({ items, accounts, sessions, invites }) {
     requireAdmin(me);
     const body = await readJson(req);
     const { account, changed } = accounts.changeRole(me.id, targetId, body.role);
-    publish(changed);
+    sse.publish(changed);
     return sendJson(res, 200, { account });
   }
 
   function handleDeleteAccount(res, me, targetId) {
     requireAdmin(me);
     const { removed, changed } = accounts.deleteAccount(me.id, targetId);
-    publish(changed);
+    sse.publish(changed);
     return sendJson(res, 200, { ok: true, ...removed });
   }
 
@@ -199,7 +199,7 @@ export function createApi({ items, accounts, sessions, invites }) {
     requireAdmin(me);
     const body = await readJson(req);
     const { moved, changed } = accounts.transferItems(targetId, Number(body.to_account_id));
-    publish(changed);
+    sse.publish(changed);
     return sendJson(res, 200, { ok: true, moved });
   }
 
