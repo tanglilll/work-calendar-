@@ -102,6 +102,9 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent-soft
 .month-nav { display: flex; align-items: center; gap: 6px; }
 .month-label { min-width: 110px; text-align: center; font-weight: 600; }
 .topbar-right { margin-left: auto; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+/* 按钮组是上面那条的例外：它必须能收窄，自己那条 flex-wrap 才会生效。
+   不收窄时它的宽度等于所有按钮的最大内容宽，窄屏下会直接顶出视口把「登出」裁掉。 */
+.topbar > .topbar-right { flex-shrink: 1; }
 .whoami { color: var(--muted); font-size: 13px; }
 
 /* 待接受邀请的入口与角标 */

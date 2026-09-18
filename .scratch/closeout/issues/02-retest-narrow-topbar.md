@@ -106,3 +106,13 @@ powershell.exe -NoProfile -Command "Get-Process node -ErrorAction SilentlyContin
 - **不影响本票结论**。测量是在刷新后的正确状态下做的（`capabilities` 三项全 `true`、`管理` 按钮可见），四个宽度的数字因此包含了「管理」这一块。
 - **工单 03（管理面板验证）会正撞上这条**：不刷新就点不到「管理」。已在 03 顶部加了执行前提。修不修、在哪一票修，不在本票范围。
 - 上一轮的 c2–c6 之所以没发现，推测是那些验证在页面已经带着登录态、`boot()` 正常跑过的状态下进行的（例如刷新后或新标签页）——登录动作本身的那一段没人盯着顶栏看过。
+
+## Comments
+
+**2026-09-18 补注（工单 06 的补测）——本票的复测夹具少了一个按钮。**
+
+本票测的是**没有待接受邀请**的顶栏：admin 的 `#btn-invites` 是 `hidden`，可见按钮 5 个。数字对那个夹具逐项成立，但不覆盖「收到邀请之后」的顶栏——多出这一块（约 62px）后，420px 下按钮组顶出容器、`登出` 被裁：`scrollWidth` **423** > `clientWidth` 405，整页也横向溢出。原因是 `.topbar > * { flex-shrink: 0 }` 让按钮组无法收缩，而按钮组一旦不可收缩，它自己那条 `flex-wrap: wrap` 就永不触发（它的宽度恒等于所有按钮的最大内容宽）。
+
+已在 `public/style.css` 补一条例外（`.topbar > .topbar-right { flex-shrink: 1 }`），并用 6 按钮顶栏在 1280 / 700 / 520 / 420 / 320 五个宽度重测通过（无溢出、6 个按钮矩形全在视口与顶栏内、中心点命中的都是按钮自己）。完整数据与被推翻的两句原话见 `.scratch/browser-verification/issues/06-narrow-window-topbar.md` 的 Comments。
+
+本票对 5 按钮夹具的结论不变；README 的口径也不需要改。
