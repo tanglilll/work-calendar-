@@ -13,11 +13,22 @@
  * 登录接口是最容易被顺手写错的一处：密码错也是 401，但那是凭据错误，不是会话失效。
  * 无差别地按 401 处理，会在每次输错密码时清空状态、并顶掉「用户名或密码不正确」那句
  * 提示，所以下面单独有一条把它钉住。
+ *
+ * 公开端点的豁免也住在同一个文件里（PUBLIC_ENDPOINTS），并有第二条判据 shouldEndSession
+ * 把「状态码 + 路径」一起判掉：请求层没有「记得传 flag」的机会，清单忘了加一条，
+ * 它的凭据错误就会被当成会话失效——那条失败模式由 test/contracts.test.js 拿真路由核对。
  */
 import { test, describe, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { SESSION_EXPIRED_MESSAGE, isSessionExpired, setSessionExpiredHandler } from '../public/session.js';
+import {
+  PUBLIC_ENDPOINTS,
+  SESSION_EXPIRED_MESSAGE,
+  isPublicEndpoint,
+  isSessionExpired,
+  setSessionExpiredHandler,
+  shouldEndSession,
+} from '../public/session.js';
 import { api } from '../public/api.js';
 
 const realFetch = globalThis.fetch;
@@ -61,6 +72,28 @@ describe('isSessionExpired：会话失效的唯一判据', () => {
     ];
     for (const [status, why] of notExpired) {
       assert.equal(isSessionExpired(status), false, `${why}（${status}）不该被当成会话失效`);
+    }
+  });
+});
+
+describe('公开端点的豁免：与判据同住一处', () => {
+  test('清单里的路径豁免会话失效判定（它们的 401 是凭据错误）', () => {
+    for (const path of PUBLIC_ENDPOINTS) {
+      assert.equal(isPublicEndpoint(path), true);
+      assert.equal(shouldEndSession(401, path), false, `${path} 的 401 不该被当成会话失效`);
+    }
+  });
+
+  test('不在清单里的路径：401 照旧结束会话（清单不是「谁也拦不住」的万能票）', () => {
+    for (const path of ['/api/items', '/api/invites', '/api/admin/accounts']) {
+      assert.equal(isPublicEndpoint(path), false);
+      assert.equal(shouldEndSession(401, path), true, `${path} 的 401 意味着服务端结束了会话`);
+    }
+  });
+
+  test('状态码边界没有被豁免清单放宽：非 401 一律不结束会话', () => {
+    for (const status of [400, 403, 404, 409, 429, 500, undefined]) {
+      assert.equal(shouldEndSession(status, '/api/items'), false, `${status} 不是会话失效`);
     }
   });
 });

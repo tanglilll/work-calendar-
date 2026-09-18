@@ -1,7 +1,15 @@
 /** admin 管理面板：待批准申请 / 账号管理 / 归档（只读）。 */
 import { api } from './api.js';
 import { esc, formatDateTime, ownerLabel, toast } from './util.js';
-import { bindDialogForThisOpen } from './dialog.js';
+import {
+  DIALOG_ACT,
+  actAttr,
+  openDialog,
+  outcomeOf,
+  presentResult,
+  readAct,
+  runAct,
+} from './contracts.js';
 
 /**
  * 面板的视图状态：tab 是页签，transferFrom 非空时转移视图取代页签视图。
@@ -54,14 +62,15 @@ export function transferCandidates(accounts, fromId) {
 
 export function openAdminDialog(dialog, ctx) {
   const { me, palette, roles, onDone } = ctx;
-  if (dialog.open) dialog.close();
   // 视图状态与它的迁移都在文件顶的纯函数里；这里只负责按状态渲染与接网络
   let view = initialAdminState();
+  // 内容由 openDialog 写进 dialog，所以开框之后才拿得到面板主体
+  let body = null;
 
-  dialog.innerHTML = `
+  const html = `
     <div class="dialog-head">
       <span>管理</span>
-      <button type="button" data-act="close" title="关闭">✕</button>
+      <button type="button" ${actAttr(DIALOG_ACT.close)} title="关闭">✕</button>
     </div>
     <div class="admin-tabs">
       <button type="button" class="tab is-active" data-tab="requests">待批准申请</button>
@@ -70,7 +79,13 @@ export function openAdminDialog(dialog, ctx) {
     </div>
     <div class="dialog-body" id="admin-body"></div>`;
 
-  const body = dialog.querySelector('#admin-body');
+  /** 一次操作结果的呈现口：失败与成功同一条路径（见 contracts.js）。 */
+  const ui = {
+    toast,
+    refresh: () => render(),
+    close: () => dialog.close(),
+    done: onDone,
+  };
 
   async function render() {
     dialog.querySelectorAll('[data-tab]').forEach((b) => {
@@ -161,63 +176,70 @@ export function openAdminDialog(dialog, ctx) {
       <p class="hint">归档是只读的：这里只能查看，不能恢复为未完成。归档不可逆是刻意的设计，见 ADR 相关的设计记录。</p>`;
   }
 
-  // 「哪一种操作该做什么」都在这里；监听器由 bindDialogForThisOpen 按次注册，
-  // 因此这个函数每次打开只注册一组，不会累积。
+  // 无结果的纯视图动作：查表执行，表键就是词表本身
+  const actHandlers = {
+    [DIALOG_ACT.close]: () => dialog.close(),
+    /** 取消转移：只回页签视图，不碰任何账号数据。 */
+    [DIALOG_ACT.cancelTransfer]: () => {
+      view = adminTransition(view, { type: 'close-transfer' });
+      return render();
+    },
+  };
+
+  /**
+   * 一次按钮点击对应的服务端操作。成功返回「该呈现什么」（与 items-flow 同一种 result 对象，
+   * 由 presentResult 统一呈现）；失败照常抛出，交给 outcomeOf 归一——所以这里不判状态码，
+   * 也不再自己决定失败之后要不要重画（那是失败结果上的 refresh 位，见 contracts.js）。
+   * 用户在二次确认里取消：返回空结果，什么都不做。
+   */
+  async function perform(el) {
+    const d = el.dataset;
+    if (d.approve) {
+      await api.approve(Number(d.approve));
+      return { ok: true, toast: '已批准，账号已生成', refresh: true, done: true };
+    }
+    if (d.reject) {
+      if (!confirm('确认拒绝并删除这条申请？对方可以重新提交。')) return {};
+      await api.reject(Number(d.reject));
+      return { ok: true, toast: '已拒绝', refresh: true, done: true };
+    }
+    if (d.role) {
+      await api.setRole(Number(d.id), d.role);
+      return { ok: true, toast: '角色已更新', refresh: true, done: true };
+    }
+    if (d.transfer) {
+      view = adminTransition(view, { type: 'open-transfer', accountId: Number(d.transfer) });
+      return { ok: true, refresh: true };
+    }
+    if (d.transferTo) {
+      const res = await api.transferItems(view.transferFrom, Number(d.transferTo));
+      view = adminTransition(view, { type: 'close-transfer' });
+      return { ok: true, toast: `已转移 ${res.moved} 条事项给 ${d.username}`, refresh: true, done: true };
+    }
+    if (d.del) {
+      if (!confirm('确认删除该账号？此操作不可撤销。若其名下还有未归档事项，系统会拒绝。')) return {};
+      const res = await api.deleteAccount(Number(d.del));
+      const extra = res.deletedArchivedItems ? `，并删除了 ${res.deletedArchivedItems} 条归档记录` : '';
+      return { ok: true, toast: `账号已删除${extra}`, refresh: true, done: true };
+    }
+    return {};
+  }
+
+  // 「哪一种操作该做什么」都在这里；监听器由 openDialog 按次注册（见 contracts.js 与 dialog.js），
+  // 因此每次打开只注册一组，不会累积。
   const onAction = async (ev) => {
     const el = ev.target.closest('button');
     if (!el) return;
 
-    if (el.dataset.act === 'close') {
-      dialog.close();
-      return;
-    }
+    const act = readAct(el);
+    if (act) return runAct(actHandlers, act);
     if (el.dataset.tab) {
       view = adminTransition(view, { type: 'select-tab', tab: el.dataset.tab });
       await render();
       return;
     }
-    if (el.dataset.act === 'cancel-transfer') {
-      view = adminTransition(view, { type: 'close-transfer' });
-      await render();
-      return;
-    }
-
-    try {
-      if (el.dataset.approve) {
-        await api.approve(Number(el.dataset.approve));
-        toast('已批准，账号已生成');
-        await render();
-        onDone();
-      } else if (el.dataset.reject) {
-        if (!confirm('确认拒绝并删除这条申请？对方可以重新提交。')) return;
-        await api.reject(Number(el.dataset.reject));
-        toast('已拒绝');
-        await render();
-        onDone();
-      } else if (el.dataset.role) {
-        await api.setRole(Number(el.dataset.id), el.dataset.role);
-        toast('角色已更新');
-        await render();
-        onDone();
-      } else if (el.dataset.transfer) {
-        view = adminTransition(view, { type: 'open-transfer', accountId: Number(el.dataset.transfer) });
-        await render();
-      } else if (el.dataset.transferTo) {
-        const res = await api.transferItems(view.transferFrom, Number(el.dataset.transferTo));
-        toast(`已转移 ${res.moved} 条事项给 ${el.dataset.username}`);
-        view = adminTransition(view, { type: 'close-transfer' });
-        await render();
-        onDone();
-      } else if (el.dataset.del) {
-        await doDelete(Number(el.dataset.del));
-      }
-    } catch (err) {
-      toast(err.message, 'error');
-      if (err.status === 409 || err.status === 400) await render();
-    }
+    await presentResult(await outcomeOf(() => perform(el)), ui);
   };
-  // 同 itemform.js：监听器按「这一次打开」注册，下次打开整体解除
-  bindDialogForThisOpen(dialog, { click: onAction });
 
   /**
    * 转移视图：候选账号列成一列可点条目，取代原先的 prompt()——它在部分内嵌 webview 里被禁用。
@@ -236,7 +258,7 @@ export function openAdminDialog(dialog, ctx) {
     if (!targets.length) {
       body.innerHTML = `<p class="panel-empty">没有其他账号可以接收事项。</p>
         <div class="inline-actions">
-          <button type="button" data-act="cancel-transfer">返回账号列表</button>
+          <button type="button" ${actAttr(DIALOG_ACT.cancelTransfer)}>返回账号列表</button>
         </div>`;
       return;
     }
@@ -253,24 +275,17 @@ export function openAdminDialog(dialog, ctx) {
         .join('')}</tbody></table>
       <p class="hint">把 ${esc(from.username)} 名下的全部事项转给谁？它作为唯一 owner 的未归档事项必须先转走，之后才能删除该账号。点「取消」返回账号列表，不做任何改动。</p>
       <div class="inline-actions">
-        <button type="button" data-act="cancel-transfer">取消</button>
+        <button type="button" ${actAttr(DIALOG_ACT.cancelTransfer)}>取消</button>
       </div>`;
   }
 
-  async function doDelete(id) {
-    if (!confirm('确认删除该账号？此操作不可撤销。若其名下还有未归档事项，系统会拒绝。')) return;
-    try {
-      const res = await api.deleteAccount(id);
-      const extra = res.deletedArchivedItems ? `，并删除了 ${res.deletedArchivedItems} 条归档记录` : '';
-      toast(`账号已删除${extra}`);
-      await render();
-      onDone();
-    } catch (err) {
-      toast(err.message, 'error');
-      await render();
-    }
-  }
-
-  render();
-  dialog.showModal();
+  // 开框仪式与监听器生命周期各有落点：openDialog 见 contracts.js，按次解除见 dialog.js
+  openDialog(dialog, {
+    html,
+    listeners: { click: onAction },
+    onOpen: () => {
+      body = dialog.querySelector('#admin-body');
+      render();
+    },
+  });
 }

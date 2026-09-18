@@ -4,21 +4,35 @@
  */
 import { api } from './api.js';
 import { esc, toast } from './util.js';
-import { bindDialogForThisOpen } from './dialog.js';
+import {
+  DIALOG_ACT,
+  actAttr,
+  openDialog,
+  outcomeOf,
+  presentResult,
+  readAct,
+  runAct,
+} from './contracts.js';
 import { respondToInvite } from './items-flow.js';
 
 export function openInvitesDialog(dialog, ctx) {
   const { onDone } = ctx;
-  if (dialog.open) dialog.close();
+  // 内容由 openDialog 写进 dialog，所以开框之后才拿得到列表主体
+  let body = null;
 
-  dialog.innerHTML = `
+  const html = `
     <div class="dialog-head">
       <span>待接受邀请</span>
-      <button type="button" data-act="close" title="关闭">✕</button>
+      <button type="button" ${actAttr(DIALOG_ACT.close)} title="关闭">✕</button>
     </div>
     <div class="dialog-body" id="invites-body"><p class="panel-empty">加载中…</p></div>`;
 
-  const body = dialog.querySelector('#invites-body');
+  const ui = {
+    toast,
+    refresh: () => render(),
+    close: () => dialog.close(),
+    done: onDone,
+  };
 
   async function render() {
     const { items } = await api.invites();
@@ -43,38 +57,37 @@ export function openInvitesDialog(dialog, ctx) {
       .join('');
   }
 
+  const actHandlers = {
+    [DIALOG_ACT.close]: () => dialog.close(),
+  };
+
   async function onAction(ev) {
     const el = ev.target.closest('button');
     if (!el) return;
 
-    if (el.dataset.act === 'close') {
-      dialog.close();
-      return;
-    }
+    const act = readAct(el);
+    if (act) return runAct(actHandlers, act);
 
     const id = el.dataset.accept ?? el.dataset.reject;
     if (!id) return;
 
-    const result = await respondToInvite({
-      api,
-      invite: { id: Number(id) },
-      accept: !!el.dataset.accept,
-    });
-    if (result.message) toast(result.message, 'error');
-    if (result.toast) toast(result.toast);
-
-    try {
-      await render();
-      onDone();
-    } catch (err) {
-      toast(err.message, 'error');
-    }
+    // 回应之后列表与应用状态都要重拉——成败都一样：失败常意味着这条邀请已经不在待处理里了
+    const result = await outcomeOf(() =>
+      respondToInvite({ api, invite: { id: Number(id) }, accept: !!el.dataset.accept }),
+    );
+    await presentResult({ ...result, refresh: true, done: true }, ui);
   }
 
-  bindDialogForThisOpen(dialog, { click: onAction });
-
-  render().catch((err) => {
-    body.innerHTML = `<p class="form-msg" data-kind="error">${esc(err.message)}</p>`;
+  // 开框仪式与监听器生命周期各有落点：openDialog 见 contracts.js，按次解除见 dialog.js
+  openDialog(dialog, {
+    html,
+    listeners: { click: onAction },
+    onOpen: () => {
+      body = dialog.querySelector('#invites-body');
+      // 初次加载失败时把话说在框里（列表还没画出来，没有别的落点）
+      render().catch((err) => {
+        body.innerHTML = `<p class="form-msg" data-kind="error">${esc(err.message)}</p>`;
+      });
+    },
   });
-  dialog.showModal();
 }

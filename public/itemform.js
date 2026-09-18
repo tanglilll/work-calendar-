@@ -1,7 +1,15 @@
 /** 新建 / 编辑事项的对话框。流程决策在 items-flow.js，这里只负责呈现与绑定。 */
 import { api } from './api.js';
 import { esc, ownerNames, setFieldErrors, toast } from './util.js';
-import { bindDialogForThisOpen } from './dialog.js';
+import {
+  DIALOG_ACT,
+  actAttr,
+  openDialog,
+  outcomeOf,
+  presentResult,
+  readAct,
+  runAct,
+} from './contracts.js';
 import { archiveItem, invitePeople, removeItem, saveItem } from './items-flow.js';
 
 /**
@@ -45,8 +53,6 @@ export function itemPayload(values, { canAssign = false } = {}) {
 export function openItemDialog(dialog, ctx) {
   const { item, today, tags, owners, canAssign, onDone } = ctx;
   const editing = !!item;
-
-  if (dialog.open) dialog.close();
 
   const isOwner = (id) => (item?.owners ?? []).some((o) => o.id === id);
   const invitable = owners.filter((o) => !isOwner(o.id));
@@ -99,15 +105,15 @@ export function openItemDialog(dialog, ctx) {
                )
                .join('')}
            </div>
-           <div><button type="button" data-act="invite">发出邀请</button></div>
+           <div><button type="button" ${actAttr(DIALOG_ACT.invite)}>发出邀请</button></div>
            <div class="field-error" data-error-for="invite_ids"></div>
          </div>`
       : '';
 
-  dialog.innerHTML = `
+  const html = `
     <div class="dialog-head">
       <span>${editing ? '编辑事项' : '新建事项'}</span>
-      <button type="button" data-act="cancel" title="关闭">✕</button>
+      <button type="button" ${actAttr(DIALOG_ACT.close)} title="关闭">✕</button>
     </div>
     <div class="dialog-body">
       <form id="item-form" autocomplete="off">
@@ -151,13 +157,14 @@ export function openItemDialog(dialog, ctx) {
       </form>
     </div>
     <div class="dialog-foot">
-      ${editing ? '<button type="button" class="danger" data-act="delete">删除</button>' : ''}
-      ${editing ? '<button type="button" class="primary" data-act="archive">标记完成</button>' : ''}
-      <button type="button" data-act="cancel">取消</button>
-      <button type="button" class="primary" data-act="save">保存</button>
+      ${editing ? `<button type="button" class="danger" ${actAttr(DIALOG_ACT.remove)}>删除</button>` : ''}
+      ${editing ? `<button type="button" class="primary" ${actAttr(DIALOG_ACT.archive)}>标记完成</button>` : ''}
+      <button type="button" ${actAttr(DIALOG_ACT.close)}>取消</button>
+      <button type="button" class="primary" ${actAttr(DIALOG_ACT.save)}>保存</button>
     </div>`;
 
-  const form = dialog.querySelector('#item-form');
+  // 内容由 openDialog 写进 dialog，所以控件按需查找——事件只可能在开框之后发生
+  const form = () => dialog.querySelector('#item-form');
   const busy = (on) => {
     dialog.querySelectorAll('button').forEach((b) => {
       b.disabled = on;
@@ -165,59 +172,53 @@ export function openItemDialog(dialog, ctx) {
   };
 
   const checkedIds = (name) =>
-    [...form.querySelectorAll(`input[name="${name}"]:checked`)].map((el) => Number(el.value));
+    [...form().querySelectorAll(`input[name="${name}"]:checked`)].map((el) => Number(el.value));
 
   function collect() {
     // 读 FormData 只有浏览器能做；值对象 → payload 的映射在 itemPayload 里（有判据）
-    return itemPayload(itemValues(new FormData(form)), { canAssign });
+    return itemPayload(itemValues(new FormData(form())), { canAssign });
   }
 
-  /** 执行一个流程决策，并按它的结果决定怎么呈现。 */
+  const ui = {
+    setFieldErrors: (fields) => setFieldErrors(form(), fields),
+    toast,
+    close: () => dialog.close(),
+    done: onDone,
+  };
+
+  /** 执行一个流程决策，并按它的结果呈现——成功与失败同一条路径（见 contracts.js）。 */
   async function run(action) {
-    setFieldErrors(form, null);
+    setFieldErrors(form(), null);
     busy(true);
     try {
-      const result = await action();
-      if (result.fields) setFieldErrors(form, result.fields);
-      if (result.message) toast(result.message, 'error');
-      if (result.toast) toast(result.toast);
-      if (result.close) {
-        dialog.close();
-        onDone();
-      }
+      await presentResult(await outcomeOf(action), ui);
     } finally {
       busy(false);
     }
   }
 
-  const onAction = (act) => {
-    if (act === 'cancel') {
-      dialog.close();
-      return undefined;
-    }
-    if (act === 'save') return run(() => saveItem({ api, item, payload: collect() }));
-    if (act === 'archive') return run(() => archiveItem({ api, item, confirm }));
-    if (act === 'delete') return run(() => removeItem({ api, item, confirm }));
-    if (act === 'invite') {
-      return run(() => invitePeople({ api, item, accountIds: checkedIds('invite_ids') }));
-    }
-    return undefined;
+  // 「哪一个动作词该做什么」只有这一张表，表键就是词表本身——写错词名这里没有落点
+  const actions = {
+    [DIALOG_ACT.close]: () => dialog.close(),
+    [DIALOG_ACT.save]: () => run(() => saveItem({ api, item, payload: collect() })),
+    [DIALOG_ACT.archive]: () => run(() => archiveItem({ api, item, confirm })),
+    [DIALOG_ACT.remove]: () => run(() => removeItem({ api, item, confirm })),
+    [DIALOG_ACT.invite]: () =>
+      run(() => invitePeople({ api, item, accountIds: checkedIds('invite_ids') })),
   };
 
-  // 监听器按「这一次打开」注册，下次打开会整体解除——见 dialog.js
-  bindDialogForThisOpen(dialog, {
-    click: (ev) => {
-      const act = ev.target.closest('[data-act]')?.dataset.act;
-      if (act) onAction(act);
+  // 开框仪式与监听器生命周期各有落点：openDialog 见 contracts.js，按次解除见 dialog.js
+  openDialog(dialog, {
+    html,
+    listeners: {
+      click: (ev) => runAct(actions, readAct(ev.target)),
+      submit: (ev) => {
+        ev.preventDefault();
+        run(() => saveItem({ api, item, payload: collect() }));
+      },
     },
-    submit: (ev) => {
-      ev.preventDefault();
-      run(() => saveItem({ api, item, payload: collect() }));
-    },
+    onOpen: () => form().querySelector('[name="title"]')?.focus(),
   });
-
-  dialog.showModal();
-  form.querySelector('[name="title"]')?.focus();
 }
 
 export { ownerNames };
