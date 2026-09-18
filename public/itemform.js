@@ -4,6 +4,44 @@ import { esc, ownerNames, setFieldErrors, toast } from './util.js';
 import { bindDialogForThisOpen } from './dialog.js';
 import { archiveItem, invitePeople, removeItem, saveItem } from './items-flow.js';
 
+/**
+ * 表单的字段表：name 同时是 form 控件名、值对象的键与 payload 键；empty 是空值的归一结果
+ * （文本字段空即 ''，服务端按未填处理；标签空即 null，服务端只接受白名单或 null）。
+ *
+ * 读值（itemValues）与写 payload（itemPayload）都由这张表派发，所以「表单加了字段却忘了
+ * 收集」没有落点——那是 21b42ba「进展被静默丢掉」的镜像风险。
+ */
+export const ITEM_FORM_FIELDS = [
+  { name: 'title', empty: '' },
+  { name: 'event_date', empty: '' },
+  { name: 'due_date', empty: '' },
+  { name: 'tag', empty: null },
+  { name: 'progress', empty: '' },
+];
+
+/** 从表单读取器（FormData，或任何提供 get(name) 的对象）按字段表取出普通值对象。读 DOM 的动作在调用方。 */
+export function itemValues(reader) {
+  return Object.fromEntries(ITEM_FORM_FIELDS.map(({ name }) => [name, reader.get(name)]));
+}
+
+/**
+ * 值对象 → payload。不碰 DOM，因此 node:test 里能直接断言（见 test/itemform.test.js）。
+ *
+ * owner_ids 不走字段表：它是可多选的勾选组，FormData.get 只给第一个，由调用方数出已勾选的项。
+ * 这个键只在能直接改名单的人（manager/admin）身上出现——普通成员保存时不提交它，
+ * 因此不会试图改名单（是否允许仍由服务端判一次）。id 一并转成数字，与请求体的约定一致。
+ */
+export function itemPayload(values, { canAssign = false } = {}) {
+  const payload = {};
+  for (const { name, empty } of ITEM_FORM_FIELDS) {
+    payload[name] = String(values[name] ?? '') || empty;
+  }
+  if (canAssign) {
+    payload.owner_ids = Array.isArray(values.owner_ids) ? values.owner_ids.map(Number) : [];
+  }
+  return payload;
+}
+
 export function openItemDialog(dialog, ctx) {
   const { item, today, tags, owners, canAssign, onDone } = ctx;
   const editing = !!item;
@@ -130,16 +168,8 @@ export function openItemDialog(dialog, ctx) {
     [...form.querySelectorAll(`input[name="${name}"]:checked`)].map((el) => Number(el.value));
 
   function collect() {
-    const fd = new FormData(form);
-    const payload = {
-      title: String(fd.get('title') || ''),
-      event_date: String(fd.get('event_date') || ''),
-      due_date: String(fd.get('due_date') || ''),
-      tag: String(fd.get('tag') || '') || null,
-      progress: String(fd.get('progress') || ''),
-    };
-    if (canAssign) payload.owner_ids = checkedIds('owner_ids');
-    return payload;
+    // 读 FormData 只有浏览器能做；值对象 → payload 的映射在 itemPayload 里（有判据）
+    return itemPayload(itemValues(new FormData(form)), { canAssign });
   }
 
   /** 执行一个流程决策，并按它的结果决定怎么呈现。 */

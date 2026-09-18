@@ -3,12 +3,60 @@ import { api } from './api.js';
 import { esc, formatDateTime, ownerLabel, toast } from './util.js';
 import { bindDialogForThisOpen } from './dialog.js';
 
+/**
+ * 面板的视图状态：tab 是页签，transferFrom 非空时转移视图取代页签视图。
+ *
+ * 这段迁移与候选账号的计算以前混在 render() 的分支里，验收只能靠一轮真实浏览器会话；
+ * 拆成纯函数后 test/admin-view.test.js 直接断言。
+ */
+export function initialAdminState() {
+  return { tab: 'requests', transferFrom: null };
+}
+
+/** 现在该渲染哪个视图：转移视图优先——它整块取代页签视图，直到取消或完成。 */
+export function adminView(state) {
+  if (state.transferFrom !== null) return 'transfer';
+  if (state.tab === 'requests') return 'requests';
+  if (state.tab === 'accounts') return 'accounts';
+  return 'archive';
+}
+
+/**
+ * 一次界面事件之后的下一个状态。事件三类：
+ * - select-tab：切页签，同时离开转移视图；
+ * - open-transfer：进入转移视图，源账号是 accountId；
+ * - close-transfer：取消、转移完成、渲染出错、源账号已不存在——四种都只是回到页签视图。
+ * 纯函数：不改传入的状态，也不碰账号数据，「取消不改数据」因此是结构性的。
+ */
+export function adminTransition(state, event) {
+  switch (event.type) {
+    case 'select-tab':
+      return { tab: event.tab, transferFrom: null };
+    case 'open-transfer':
+      return { tab: state.tab, transferFrom: event.accountId };
+    case 'close-transfer':
+      return { tab: state.tab, transferFrom: null };
+    default:
+      return state;
+  }
+}
+
+/**
+ * 转移视图的候选账号：源账号自己不在列表里；targets 为空表示没有账号可接收（渲染成空视图）。
+ * 源账号已不存在时返回 null——面板开着时它在别处被删了，调用方据此退回账号列表，
+ * 而不是停在一个指向不存在账号的视图上。
+ */
+export function transferCandidates(accounts, fromId) {
+  const from = accounts.find((a) => a.id === fromId);
+  if (!from) return null;
+  return { from, targets: accounts.filter((a) => a.id !== fromId) };
+}
+
 export function openAdminDialog(dialog, ctx) {
   const { me, palette, roles, onDone } = ctx;
   if (dialog.open) dialog.close();
-  let tab = 'requests';
-  // 转移视图：非空时 body 渲染候选账号列表（见 renderTransfer），点选或取消后清空、回到账号列表
-  let transferFrom = null;
+  // 视图状态与它的迁移都在文件顶的纯函数里；这里只负责按状态渲染与接网络
+  let view = initialAdminState();
 
   dialog.innerHTML = `
     <div class="dialog-head">
@@ -26,16 +74,17 @@ export function openAdminDialog(dialog, ctx) {
 
   async function render() {
     dialog.querySelectorAll('[data-tab]').forEach((b) => {
-      b.classList.toggle('is-active', b.dataset.tab === tab);
+      b.classList.toggle('is-active', b.dataset.tab === view.tab);
     });
     body.innerHTML = '<p class="panel-empty">加载中…</p>';
     try {
-      if (transferFrom !== null) await renderTransfer();
-      else if (tab === 'requests') await renderRequests();
-      else if (tab === 'accounts') await renderAccounts();
+      const which = adminView(view);
+      if (which === 'transfer') await renderTransfer();
+      else if (which === 'requests') await renderRequests();
+      else if (which === 'accounts') await renderAccounts();
       else await renderArchive();
     } catch (err) {
-      transferFrom = null;
+      view = adminTransition(view, { type: 'close-transfer' });
       body.innerHTML = `<p class="form-msg" data-kind="error">${esc(err.message)}</p>`;
     }
   }
@@ -123,13 +172,12 @@ export function openAdminDialog(dialog, ctx) {
       return;
     }
     if (el.dataset.tab) {
-      tab = el.dataset.tab;
-      transferFrom = null;
+      view = adminTransition(view, { type: 'select-tab', tab: el.dataset.tab });
       await render();
       return;
     }
     if (el.dataset.act === 'cancel-transfer') {
-      transferFrom = null;
+      view = adminTransition(view, { type: 'close-transfer' });
       await render();
       return;
     }
@@ -152,12 +200,12 @@ export function openAdminDialog(dialog, ctx) {
         await render();
         onDone();
       } else if (el.dataset.transfer) {
-        transferFrom = Number(el.dataset.transfer);
+        view = adminTransition(view, { type: 'open-transfer', accountId: Number(el.dataset.transfer) });
         await render();
       } else if (el.dataset.transferTo) {
-        const res = await api.transferItems(transferFrom, Number(el.dataset.transferTo));
+        const res = await api.transferItems(view.transferFrom, Number(el.dataset.transferTo));
         toast(`已转移 ${res.moved} 条事项给 ${el.dataset.username}`);
-        transferFrom = null;
+        view = adminTransition(view, { type: 'close-transfer' });
         await render();
         onDone();
       } else if (el.dataset.del) {
@@ -176,16 +224,15 @@ export function openAdminDialog(dialog, ctx) {
    * 点选走既有的转移接口；取消（或切到别的 tab）回到账号列表，不做任何改动。
    */
   async function renderTransfer() {
-    const fromId = transferFrom;
     const { accounts } = await api.adminAccounts();
-    const from = accounts.find((a) => a.id === fromId);
-    if (!from) {
+    const candidates = transferCandidates(accounts, view.transferFrom);
+    if (!candidates) {
       // 面板开着时这个账号在别处被删了：退回账号列表，别停在一个指向不存在账号的视图上
-      transferFrom = null;
+      view = adminTransition(view, { type: 'close-transfer' });
       await render();
       return;
     }
-    const targets = accounts.filter((a) => a.id !== fromId);
+    const { from, targets } = candidates;
     if (!targets.length) {
       body.innerHTML = `<p class="panel-empty">没有其他账号可以接收事项。</p>
         <div class="inline-actions">
