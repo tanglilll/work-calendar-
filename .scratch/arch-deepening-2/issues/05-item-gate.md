@@ -4,7 +4,7 @@
 
 **Blocked by:** 01、03、04（同一批文件 `items.js` / `invites.js` / `accounts.js` 的串行约束；段一最后一张）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 ## 形状
 
@@ -168,3 +168,11 @@
   被邀请人定向通知、无连累时不产生多余通知）。
 - `npm test` → **275 项通过、0 失败**（基线 251 + 本票 24）。
 
+
+## 主 agent 核对（2026-09-18）
+
+- **提交范围**：`f61b262`，8 个文件。两处票面外、均已说明：`server/app.js` 一行（`createAccounts(store, items, invites)` 组合根接线）、`README.md` 三处（「归档」规则补「不能再改 / 再归档 / 再邀请」，模块表 `items.js` 一行）——后者是**产品可见规则变化**的文档同步，属本票应做。工作区干净，全量 **275 项全绿**（本票新增 24）。
+- **五条结构声明逐条独立复核**：① `ITEM_ACCESS_PURPOSES` 存在且冻结（`items.js:130`），用途表外抛 `TypeError`；② `invites.js` 里 `canAccessItem` **已无**；③ `accounts.js` 里 `sessions` **只剩注释**（解释级联），无任何 SQL；④ sole-owner 谓词在 `items.js` 里**只剩一处**（合并前是三处）；⑤ 「无权处置他人的事项」**只有 `items.js` 一个来源**。
+- **先红后绿成立**：领域层 `Missing expected exception`（邀请已归档事项被接受）+ REST `201 !== 409`（`POST /api/items/:id/invites` 实测可达），共 11 红 → 改后 20 项全绿。
+- **顺带核对（07 那条缺口）**：覆盖了落在本票范围内的一半——删账号级联删掉它发出的邀请时，受影响的被邀请人收到 `accountChanged([...], 'invites-changed')`（删除前问一次 `pendingInviteesFrom`，无人受影响不产出多余变更）。**另两处同类缺口如实报告、未覆盖**（带实测数据）：① 删事项级联删掉待接受邀请时，被邀请人只收到 `itemOwners:deleted`、角标不更新；② 删账号级联摘掉共享事项的成员资格时，`changed` 里没有 `itemOwners` 一路、`version` 也未动。二者都需要 items 反向读邀请表（会成环）或为每条共享事项算差分，超出「顺带覆盖」——**建议另开票**（主 agent 记录在案，见本轮收口汇报）。
+- **两条行为差异已记录**：`invite` / `read` 是新增文案（`write` / `archive` 保留原文案）；`accept`（回应邀请）不走门，事后被归档的邀请仍可接受——与今天行为一致，票面未要求改。
