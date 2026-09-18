@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately.（段一第一张）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 ## 字段表的形状
 
@@ -95,3 +95,11 @@
 **改动面**：`server/items.js`（+120/-66）、`server/routes.js`（+3/-7）、
 `test/items.test.js`（+79）、新增 `test/bootstrap.test.js`。未动 `server/db.js` 与任何前端文件。
 
+
+## 主 agent 核对（2026-09-18）
+
+- **提交范围**：`f7552a7`，五个文件全是本票的（`server/items.js` / `routes.js` + `test/items.test.js` / `test/bootstrap.test.js` + 本票）；提交后工作区干净。全量套件 **223 项全绿**（本票新增 13 条，其中表驱动往返 10 条）。
+- **承重断言已核对**：表驱动那条遍历 `ITEM_FIELDS` 断言「新建 / 更新各字段往返」，并附一条样本完备性检查——新增字段若没补样本会直接报出字段名。红证据（临时退回手写列清单 → `✖ 新建带上 progress → 落库后原样返回`，`null !== '已立项'`）成立。
+- **真实实例复核**（一次性实例 `127.0.0.1:4960`，验完即停、库与日志已删）：`GET /api/bootstrap` 的 `limits` 已是**完整九项**，含此前漏掉的 `PROGRESS_MAX: 500`——这是「bootstrap 不再手挑 5 个 limit」在真实接口上的确认。
+- **一处顺带的语义收紧已确认无界面消费方**：清空进展时 `progress_updated_at` 从「刷成 now」改成 `null`，与新建路径的派生规则一致。`grep` 确认该列只被服务端与领域测试使用，界面不读它，所以没有可见行为变化；断言已把它钉住（`test/items.test.js` 的「进展都没了，更新时间不该留着」）。
+- **未做**：由字段表生成 DB schema（按票面理由：迁移成本不划算）。这张表与手写 schema 的对齐，今后由那条表驱动断言守。

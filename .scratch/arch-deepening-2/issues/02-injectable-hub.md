@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately.（计划上排在 01 之后、B/C 之前）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 ## 形状
 
@@ -108,4 +108,11 @@
 
 **全量**：`npm test` → `tests 171  suites 45  pass 171  fail 0`（基线 161 + 本票新增 10 条，无 fail）。
 换行符与其它文件保持 LF，`git status` 只列出本票的四个源文件 + 两个新测试文件。
+
+## 主 agent 核对（2026-09-18）
+
+- **提交范围**：`b716edc`，7 个文件全是本票的（`server/sse.js` / `app.js` / `routes.js` / `index.js` + `test/sse.test.js` / `test/http-entry.test.js` + 本票）；提交后工作区干净。全量套件 **223 项全绿**（含同波次其它线）。
+- **真实实例复核**（主 agent 起了一次性实例 `127.0.0.1:4960`，验完即停、库与日志已删）：`GET /` → 200、`GET /api/bootstrap` → 200，载荷里 `limits` 已是完整九项（含 `PROGRESS_MAX: 500`）——同时确认入口守卫没把 `npm start` 弄坏，以及工单 01 的 bootstrap 修复在真实接口上生效。
+- **补的一处：`import.meta.main` 的版本下限。** 查 Node v24 文档：**Added in v24.2.0，Stability 1.0（Early development）**。而 `engines` 原先写 `>=24`——在 24.0 / 24.1 上它是 `undefined`，`main()` 永不执行、`npm start` 会**一声不响地不服务**。已把 `engines` 抬到 `>=24.2.0`，README 的「需要 Node 24+」改成 24.2+ 并注明依据。这是本票引入的新依赖，属本票收口范围。
+- **一处行为收紧已确认无回归面**：业务错误现在是「整数 status 且 < 500」，于是「整数 500 + code」也不再外泄 code；真实路由里全是 4xx。
 
