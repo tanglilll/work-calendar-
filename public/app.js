@@ -307,6 +307,8 @@ async function openItem(id, presetDate) {
     tags: state.tags,
     owners: state.owners,
     canAssign: canAssign(),
+    // 当前账号：新建时用来预勾自己（编辑时由该事项的名单决定，见 itemform.js）
+    me: state.account,
     onDone: () => {
       // 事项被写过：只重拉事项（范围见 REFRESH_PLAN.items）
       reload('items').catch((err) => toast(err.message, 'error'));

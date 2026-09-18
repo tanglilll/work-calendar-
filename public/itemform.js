@@ -57,12 +57,31 @@ export function itemPayload(values, { canAssign = false } = {}) {
   return payload;
 }
 
+/**
+ * owner 勾选组**开框时的初始勾选**——纯函数，node:test 里直接断言（见 test/itemform.test.js）。
+ *
+ * - 编辑既有事项：勾选只由该事项的 owner 名单决定，**当前账号不参与**——否则「编辑别人的事项」
+ *   会把自己悄悄加进名单。
+ * - 新建：预勾当前账号。这是产品取舍（工单 04）：勾选组对 manager/admin 是可见的，常见情形正是
+ *   「给自己建一条」，取消勾选的成本低于漏勾导致服务端 400「owner 名单至少要有一个人」的成本。
+ * - `canAssign` 为假的人表单里没有勾选组（只能看名单 / 发邀请），这里恒为空：预勾选在他们身上
+ *   没有落点，本项改动对他们不可见。
+ */
+export function initialOwnerIds({ item = null, me = null, canAssign = false } = {}) {
+  if (!canAssign) return [];
+  if (item) return (item.owners ?? []).map((o) => o.id);
+  return me ? [me.id] : [];
+}
+
 export function openItemDialog(dialog, ctx) {
-  const { item, today, tags, owners, canAssign, onDone } = ctx;
+  const { item, today, tags, owners, canAssign, me = null, onDone } = ctx;
   const editing = !!item;
 
   const isOwner = (id) => (item?.owners ?? []).some((o) => o.id === id);
   const invitable = owners.filter((o) => !isOwner(o.id));
+  // 当前账号由调用点（app.js）传入（形状与 openAdminDialog 的 ctx.me 一致，对话框不猜自己是谁）；
+  // 勾选组预勾谁见 initialOwnerIds——编辑态给回该事项的名单，新建态预勾自己。
+  const checked = new Set(initialOwnerIds({ item, me, canAssign }));
 
   const tagOptions = ['<option value="">（无标签）</option>']
     .concat(
@@ -81,7 +100,7 @@ export function openItemDialog(dialog, ctx) {
            ${owners
              .map(
                (o) => `<label class="owner-option">
-                 <input type="checkbox" name="owner_ids" value="${o.id}"${isOwner(o.id) ? ' checked' : ''}>
+                 <input type="checkbox" name="owner_ids" value="${o.id}"${checked.has(o.id) ? ' checked' : ''}>
                  <span>${esc(o.username)}</span>
                </label>`,
              )
