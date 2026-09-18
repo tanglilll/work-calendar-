@@ -114,7 +114,11 @@ function connectStream() {
   const es = new EventSource('/api/events');
   // 事项事件已由服务端按可见性过滤，这里只做「重新拉取」
   es.addEventListener('items', scheduleRefresh);
-  es.addEventListener('admin', scheduleRefresh);
+  es.addEventListener('admin', () => {
+    // 账号增删改会改变事项对话框里可选的 owner 名单，两样都要重拉
+    scheduleRefresh();
+    loadOwners();
+  });
   es.addEventListener('self', () => {
     // 自己的角色/账号被改动：重新走一次 bootstrap，权限变化立刻生效
     boot().catch(() => {});
@@ -197,10 +201,11 @@ async function onLogin(ev) {
   msg.textContent = '';
   const fd = new FormData(form);
   try {
-    const res = await api.login(String(fd.get('username') || ''), String(fd.get('password') || ''));
-    state.account = res.account;
+    await api.login(String(fd.get('username') || ''), String(fd.get('password') || ''));
     form.reset();
-    await enterApp();
+    // 与 self 事件同理：权限、角色与邀请角标都由 bootstrap 下发，
+    // 只走 enterApp 的话它们停在未登录时的值（管理入口要手动刷新才出现）
+    await boot();
   } catch (err) {
     msg.textContent = err.message;
   }

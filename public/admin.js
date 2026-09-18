@@ -1,6 +1,6 @@
 /** admin 管理面板：待批准申请 / 账号管理 / 归档（只读）。 */
 import { api } from './api.js';
-import { esc, toast } from './util.js';
+import { esc, formatDateTime, ownerLabel, toast } from './util.js';
 import { bindDialogForThisOpen } from './dialog.js';
 
 export function openAdminDialog(dialog, ctx) {
@@ -49,7 +49,7 @@ export function openAdminDialog(dialog, ctx) {
           (r) => `<tr>
             <td>${esc(r.username)}</td>
             <td>${esc(r.note) || '<span class="panel-empty">（无）</span>'}</td>
-            <td>${esc(String(r.created_at).slice(0, 16).replace('T', ' '))}</td>
+            <td>${esc(formatDateTime(r.created_at))}</td>
             <td><div class="inline-actions">
               <button type="button" class="primary" data-approve="${r.id}">批准</button>
               <button type="button" class="danger" data-reject="${r.id}">拒绝</button>
@@ -97,11 +97,11 @@ export function openAdminDialog(dialog, ctx) {
         .map(
           (i) => `<tr class="archived">
             <td><span class="color-dot" style="background:${palette[i.color] || '#e5e7eb'}"></span></td>
-            <td>${esc(i.owner_name)}</td>
+            <td>${esc(ownerLabel(i))}</td>
             <td>${esc(i.title)}</td>
             <td>${esc(i.tag) || '—'}</td>
             <td>${esc(i.event_date)} → ${esc(i.due_date)}</td>
-            <td>${esc(String(i.archived_at).slice(0, 16).replace('T', ' '))}</td>
+            <td>${esc(formatDateTime(i.archived_at))}</td>
           </tr>`,
         )
         .join('')}</tbody></table>

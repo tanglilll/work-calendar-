@@ -31,6 +31,14 @@ export function formatMonth(year, month) {
   return `${year} 年 ${month} 月`;
 }
 
+/** 库里的时间戳是 UTC 的 ISO 串，展示时一律换成本机时间——界面上其余时间都是本机的。 */
+export function formatDateTime(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${toDateString(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 /**
  * 归属文案。owner 是一个并列名单（见 docs/adr/0002）：
  * 一个人写名字，多个人写「第一个 +N」——名字按用户名排序，取第一个。
