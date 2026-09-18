@@ -14,4 +14,4 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 
 ### Environment
 
-Host/network facts that tests can't catch (start services as detached processes, CDN reachability, `node:sqlite` null-prototype rows, GitHub needs the local proxy). See `docs/agents/environment.md`.
+Host/network facts that tests can't catch (start services as detached processes, CDN reachability, `node:sqlite` null-prototype rows, GitHub needs the local proxy). See `docs/agents/local-environment.md`.

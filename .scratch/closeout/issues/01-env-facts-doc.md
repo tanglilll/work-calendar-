@@ -6,7 +6,7 @@
 
 **Status:** resolved
 
-- [x] 新增一份环境文档，与既有的领域文档、issue tracker、triage 标签三份并列。四条事实各写清「症状 / 原因 / 正确做法」： → `docs/agents/environment.md`
+- [x] 新增一份环境文档，与既有的领域文档、issue tracker、triage 标签三份并列。四条事实各写清「症状 / 原因 / 正确做法」： → `docs/agents/local-environment.md`
   - [x] 用宿主后台任务跑服务，会在回合结束或任务被停时被清理；更糟的是停一个后台任务会**连带杀掉同工作区其它正在运行的 node 服务**。正确做法：以独立进程启动，并给出一条可直接复制的启动命令，附「停服务前先按端口查 PID、停完复查其它端口」的收尾步骤。
   - [x] 依赖 `cdn.jsdelivr.net` 的页面产物会**静默退化**——模块加载失败不进 `window.onerror`，页面只是把该渲染的东西显示成原始文本，看起来像作者写错了。需要 CDN 的交付物必须先渲染一遍再交付。
     - 本次实测 jsdelivr **可达**（交接文档写的是不可达，见「对交接文档的两处修正」），文档按「可达性会变，别当常量」改写。
@@ -20,7 +20,7 @@
 
 ## 结论
 
-**通过。** 四条事实落进新建的 `docs/agents/environment.md`，每条都写成「症状 / 原因 / 正确做法」并附可复算的命令；启动方式实测起得来、也测得停。`docs/agents/issue-tracker.md` 首段那句「本仓库没有 git remote」已改；`AGENTS.md` 加了一行索引，否则新文档没人指得着。
+**通过。** 四条事实落进新建的 `docs/agents/local-environment.md`，每条都写成「症状 / 原因 / 正确做法」并附可复算的命令；启动方式实测起得来、也测得停。`docs/agents/issue-tracker.md` 首段那句「本仓库没有 git remote」已改；`AGENTS.md` 加了一行索引，否则新文档没人指得着。
 
 落盘过程中发现交接文档有**两处不准确**（CDN 现状、`node:sqlite` 的断言名），文档按本次实测改写，并在文末留了修正说明——照抄会让下一个人的第一次尝试就失败。
 
@@ -32,7 +32,7 @@
 
 | 观察点 | 值 |
 | --- | --- |
-| 启动方式 | `Start-Process -WorkingDirectory "D:\rili" -WindowStyle Hidden`（`environment.md` §1 那条命令） |
+| 启动方式 | `Start-Process -WorkingDirectory "D:\rili" -WindowStyle Hidden`（`local-environment.md` §1 那条命令） |
 | 端口 / 绑定 | `127.0.0.1:4400`，`netstat` 看到 `LISTENING 94760` |
 | 库 | `data/verify-01.db`（空库 → 按环境变量创建初始 `admin`） |
 | stdout | 「rili 已启动：http://127.0.0.1:4400」「数据库：./data/verify-01.db」「已创建初始 admin 账号：admin」 |
@@ -86,12 +86,12 @@ MSYS 把 `/F` 当路径改写。故文档统一写 `Stop-Process`。
 
 ### 6. 文档形态
 
-`docs/agents/environment.md` 与既有三份并列；未新增任何领域术语，`CONTEXT.md` 未改；浏览器点击路径只有一句指向 `.scratch/browser-verification/spec.md`，未转载其表格。
+`docs/agents/local-environment.md` 与既有三份并列；未新增任何领域术语，`CONTEXT.md` 未改；浏览器点击路径只有一句指向 `.scratch/browser-verification/spec.md`，未转载其表格。
 
 ## 复现
 
 ```bash
-# 起实例（见 environment.md §1 的完整命令）
+# 起实例（见 local-environment.md §1 的完整命令）
 powershell.exe -NoProfile -Command '… Start-Process -FilePath "node" …'
 netstat -ano | grep ':4400 ' | grep LISTENING        # 拿 PID
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:4400/          # 期望 200
@@ -107,7 +107,7 @@ netstat -ano | grep ':4400 ' | grep LISTENING        # 期望为空
 | `cdn.jsdelivr.net` 不可达 | 2026-09-18 可达（200／1.4s），tailwind 也通 | 写成「会变，别当常量」，并给测可达性的命令 |
 | 对行对象做 `deepEqual` 必然失败、失败信息两侧一模一样 | 只有**严格**比较才失败，且报错与 `console.log` 都会打出 `[Object: null prototype]` | 写明两种 assert 的差别为「同一份代码换个 import 结论相反」，并给归一化写法 |
 
-历史提交 `ee383b5` 的 message 含第二种不准确表述，**不改写历史**，在 `environment.md` §3 文末记了修正说明。
+历史提交 `ee383b5` 的 message 含第二种不准确表述，**不改写历史**，在 `local-environment.md` §3 文末记了修正说明。
 
 ## 未做的事
 

@@ -2,7 +2,7 @@
 
 Issues and specs (you may know a spec as a PRD) for this repo live as markdown files in `.scratch/`.
 
-> This repo **has a git remote** (`origin` = `git@github.com:tanglilll/work-calendar-.git`, tracking `main`) but still **no `gh` CLI installed**, so the GitHub workflow isn't available. Local markdown remains the tracker of record. Reaching the remote needs the local proxy — see `environment.md`.
+> This repo **has a git remote** (`origin` = `git@github.com:tanglilll/work-calendar-.git`, tracking `main`) but still **no `gh` CLI installed**, so the GitHub workflow isn't available. Local markdown remains the tracker of record. Reaching the remote needs the local proxy — see `local-environment.md`.
 
 ## Conventions
 
