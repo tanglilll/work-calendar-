@@ -1,6 +1,16 @@
-/** 后端接口封装。错误统一带上 status / fields / code。 */
+/**
+ * 后端接口封装。错误统一带上 status / fields / code。
+ *
+ * 会话失效的判定也在这里接线：需要登录的接口拿到 401 时调用 session.js 的判据，
+ * 把收尾转交应用层注册的处理器，并把错误文案换成同一句——调用点照旧
+ * toast(err.message)，换掉才不会把「登录已失效」顶回服务端的「请先登录」。
+ *
+ * requiresSession: false 用于公开接口（启动探测、登录、登出、注册申请）：未登录时
+ * 它们本来就该能调；其中的 401（用户名或密码不正确）是凭据错误，不是会话失效。
+ */
+import { SESSION_EXPIRED_MESSAGE, isSessionExpired, notifySessionExpired } from './session.js';
 
-async function request(path, { method = 'GET', body } = {}) {
+async function request(path, { method = 'GET', body, requiresSession = true } = {}) {
   const res = await fetch(path, {
     method,
     headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
@@ -24,16 +34,23 @@ async function request(path, { method = 'GET', body } = {}) {
       err.fields = data.error.fields;
       err.code = data.error.code;
     }
+    if (requiresSession && isSessionExpired(res.status)) {
+      err.message = SESSION_EXPIRED_MESSAGE;
+      notifySessionExpired();
+    }
     throw err;
   }
   return data;
 }
 
 export const api = {
-  bootstrap: () => request('/api/bootstrap'),
-  login: (username, password) => request('/api/login', { method: 'POST', body: { username, password } }),
-  logout: () => request('/api/logout', { method: 'POST' }),
-  apply: (payload) => request('/api/register-request', { method: 'POST', body: payload }),
+  // 公开接口：未登录也能调，它们各自的失败不是「会话失效」
+  bootstrap: () => request('/api/bootstrap', { requiresSession: false }),
+  login: (username, password) =>
+    request('/api/login', { method: 'POST', body: { username, password }, requiresSession: false }),
+  logout: () => request('/api/logout', { method: 'POST', requiresSession: false }),
+  apply: (payload) =>
+    request('/api/register-request', { method: 'POST', body: payload, requiresSession: false }),
 
   listItems: () => request('/api/items'),
   createItem: (payload) => request('/api/items', { method: 'POST', body: payload }),

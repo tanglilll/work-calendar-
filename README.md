@@ -98,6 +98,7 @@ public/
   invites.js    待接受邀请的列表与接受/拒绝
   admin.js      管理模式面板
   api.js        接口封装
+  session.js    会话失效判据（只有 401）与收尾处理器注册
   util.js       转义、日期工具、归属文案、toast
 ```
 

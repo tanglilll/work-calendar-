@@ -1,5 +1,6 @@
 /** 前端入口：登录态、状态管理、实时同步与事件委托。 */
 import { api } from './api.js';
+import { SESSION_EXPIRED_MESSAGE, setSessionExpiredHandler } from './session.js';
 import { toast, formatMonth } from './util.js';
 import { buildGrid, assignItems, gridHtml } from './calendar.js';
 import { renderPanels } from './sidebar.js';
@@ -238,6 +239,11 @@ async function onLogout() {
   } catch {
     /* 忽略：本地照样清状态 */
   }
+  clearSession();
+}
+
+/** 清空本地会话：断开实时流、清状态、回登录页。主动登出与会话失效共用。 */
+function clearSession() {
   if (state.stream) {
     state.stream.close();
     state.stream = null;
@@ -245,8 +251,25 @@ async function onLogout() {
   state.account = null;
   state.items = [];
   state.capabilities = { seesAllItems: false, assignsOwner: false, managesAccounts: false };
+  state.inviteCount = 0;
   showAuth();
 }
+
+/**
+ * 会话失效的收尾（判据与文案见 session.js，那里是唯一落点）。
+ *
+ * 先关掉打开的对话框：会话都失效了，保存必定失败，留一个半开的编辑框只会让人
+ * 白填一遍。然后清状态回登录页，最后说明原因。
+ */
+function endSession() {
+  for (const dialog of [els.itemDialog, els.adminDialog, els.invitesDialog]) {
+    if (dialog.open) dialog.close();
+  }
+  clearSession();
+  toast(SESSION_EXPIRED_MESSAGE, 'error');
+}
+
+setSessionExpiredHandler(endSession);
 
 function bindEvents() {
   document.querySelectorAll('[data-auth-tab]').forEach((btn) => {
