@@ -21,7 +21,7 @@ export function createApp({ dbPath }) {
   const items = createItems(store, colors);
   const invites = createInvites(store, items);
   const sessions = createSessions(store);
-  const accounts = createAccounts(store, items);
+  const accounts = createAccounts(store, items, invites);
   // 广播中枢也由这里创建：每个实例各持一套连接表。
   // viewer 的权威来源同样在这里接线：中枢在【推送时】问 accounts 要角色，
   // 连接里不存 role 副本 —— 降权之后旧连接立刻按新角色判（工单 04）。

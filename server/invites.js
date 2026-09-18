@@ -4,19 +4,19 @@
  * 邀请**不是参与者状态**——被邀请人还不是 owner，所以它自成一类：
  * 有自己的表、自己的读法（他看不到事项本身，只看得到邀请里的标题与日期）。
  * 管理员直接改名单不走这里，那是分派，不是协商（见 docs/adr/0002）。
+ *
+ * 「能不能给这条事项发邀请」不在这里判：那是 items.js 的门
+ * （requireItemAccess(actor, itemId, 'invite')），访问与归档一起管。
  */
-import { canAccessItem } from './visibility.js';
 import { accountChanged, ownerChanges } from './sse.js';
 import { httpError } from './http.js';
 
 export function createInvites(store, items) {
   const { db, tx } = store;
 
-  /** 发起邀请。actor 必须本来就看得见这条事项——名单成员，或 manager/admin。 */
+  /** 发起邀请。actor 必须本来就处置得了这条事项——包括它没被归档（门来说这句话）。 */
   function invite(itemId, accountId, actor) {
-    const item = items.getItem(itemId);
-    if (!item) throw httpError(404, '事项不存在');
-    if (!canAccessItem(actor, item)) throw httpError(403, '无权处置他人的事项');
+    const item = items.requireItemAccess(actor, itemId, 'invite');
 
     const targetId = Number(accountId);
     if (!Number.isInteger(targetId) || targetId <= 0) throw httpError(400, '请指定要邀请的账号');
@@ -67,6 +67,20 @@ export function createInvites(store, items) {
     return db.prepare('SELECT COUNT(*) AS n FROM item_invites WHERE account_id = ?').get(account.id).n;
   }
 
+  /**
+   * 某账号发出的、还没被处理的邀请都发给了谁 —— 删账号前问一次。
+   *
+   * 它发出的邀请随账号一起级联消失（item_invites.invited_by 的 ON DELETE CASCADE），
+   * 受影响的是**被邀请人**：他们的待接受角标要立刻减一，而不是等下一次全量重拉。
+   * 「谁受了影响」由这张表的所有者算，别处不再抄一遍这个查询。
+   */
+  function pendingInviteesFrom(inviterId) {
+    return db
+      .prepare('SELECT DISTINCT account_id FROM item_invites WHERE invited_by = ? AND account_id != ?')
+      .all(inviterId, inviterId)
+      .map((row) => row.account_id);
+  }
+
   function requireMine(inviteId, account) {
     const row = db.prepare('SELECT * FROM item_invites WHERE id = ?').get(Number(inviteId));
     if (!row) throw httpError(404, '邀请不存在或已被处理');
@@ -107,5 +121,5 @@ export function createInvites(store, items) {
     return { changed: [accountChanged([account.id], 'invites-changed')] };
   }
 
-  return { invite, listFor, countFor, accept, reject };
+  return { invite, listFor, countFor, pendingInviteesFrom, accept, reject };
 }

@@ -4,8 +4,11 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { createApp } from '../server/app.js';
+
+const sourceOf = (file) => readFileSync(new URL(`../server/${file}`, import.meta.url), 'utf8');
 
 const STATUS = (fn, status) =>
   assert.throws(fn, (err) => {
@@ -185,6 +188,73 @@ describe('deleteAccount', () => {
     ]);
     assert.equal(app.accounts.findAccountByUsername('zhao'), undefined);
     assert.equal(app.items.listArchived(admin).length, 0, '归档项随账号一起删除');
+    app.close();
+  });
+});
+
+describe('删账号的连带后果：会话与邀请', () => {
+  test('旧会话立刻失效（靠外键级联，不靠 accounts 直写 sessions）', () => {
+    const { app, admin } = freshWorld();
+    const pending = apply(app, 'zhao');
+    const { account: zhao } = app.accounts.approveRequest(pending.id);
+    const { token } = app.sessions.createSession(zhao.id);
+    assert.equal(app.sessions.getSessionAccount(token).id, zhao.id, '前提：会话可用');
+
+    app.accounts.deleteAccount(admin.id, zhao.id);
+
+    assert.equal(app.sessions.getSessionAccount(token), null, '账号没了，旧会话必须立刻失效');
+    assert.equal(
+      app.store.db.prepare('SELECT COUNT(*) AS n FROM sessions WHERE account_id = ?').get(zhao.id).n,
+      0,
+      '库里也不该留下孤儿会话行（ON DELETE CASCADE + PRAGMA foreign_keys = ON）',
+    );
+    app.close();
+  });
+
+  test('accounts.js 不再直写 sessions 表：这个表的写入归 auth', () => {
+    assert.doesNotMatch(sourceOf('accounts.js'), /(FROM|INTO|UPDATE|DELETE\s+FROM)\s+sessions/i);
+  });
+
+  test('它发出的待接受邀请随账号级联消失，被邀请人收到定向通知', () => {
+    const { app, admin } = freshWorld();
+    const { account: zhao } = app.accounts.approveRequest(apply(app, 'zhao').id);
+    const { account: lin } = app.accounts.approveRequest(apply(app, 'lin').id);
+    // zhao 与 admin 共享一条事项：它不是唯一 owner，所以账号删得掉
+    const { item } = app.items.createItem(admin, {
+      title: '共享的',
+      event_date: '2026-09-01',
+      due_date: '2026-09-01',
+      tag: null,
+      owner_ids: [admin.id, zhao.id],
+    });
+    app.invites.invite(item.id, lin.id, zhao);
+    assert.equal(app.invites.countFor(lin), 1, '前提：lin 有一条待接受邀请');
+
+    const { changed } = app.accounts.deleteAccount(admin.id, zhao.id);
+
+    assert.equal(app.invites.countFor(lin), 0, '邀请随发起人级联消失');
+    assert.deepEqual(
+      changed,
+      [
+        { to: 'connections', accountIds: [zhao.id], kind: 'account-deleted' },
+        { to: 'admins', kind: 'accounts' },
+        // 不是 admin 的人是这条邀请的收件人：他的角标要立刻准，而不是等下一次全量
+        { to: 'accounts', accountIds: [lin.id], kind: 'invites-changed' },
+      ],
+      '受级联影响的是被邀请人，要定向通知',
+    );
+    app.close();
+  });
+
+  test('没有连累任何人时不产生多余的定向通知（回归）', () => {
+    const { app, admin } = freshWorld();
+    const { account: zhao } = app.accounts.approveRequest(apply(app, 'zhao').id);
+
+    const { changed } = app.accounts.deleteAccount(admin.id, zhao.id);
+    assert.deepEqual(changed, [
+      { to: 'connections', accountIds: [zhao.id], kind: 'account-deleted' },
+      { to: 'admins', kind: 'accounts' },
+    ]);
     app.close();
   });
 });

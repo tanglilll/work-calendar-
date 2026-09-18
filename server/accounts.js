@@ -1,7 +1,12 @@
 /**
  * 账号与注册申请。账号只在「批准」那一刻诞生；申请表里存的密码已经是哈希。
  *
- * store 与 items 由组合根注入：删账号前要数它名下的事项，这个依赖是显式的。
+ * store、items 与 invites 由组合根注入：删账号前要数它名下的事项，也要问出
+ * 它发出的待接受邀请都发给了谁（那些人要收到定向通知）。两个领域依赖都是显式的。
+ *
+ * 会话表的写入归 auth（auth.js 的 createSessions）：这里不删会话——
+ * 账号行删除后由 sessions.account_id 的 ON DELETE CASCADE 接手
+ * （db.js 打开库时 `PRAGMA foreign_keys = ON`），旧会话因此立刻失效。
  */
 import { hashPassword } from './auth.js';
 import { LIMITS } from './config.js';
@@ -11,7 +16,7 @@ import { httpError } from './http.js';
 
 const USERNAME_RE = /^[\p{L}\p{N}_.-]+$/u;
 
-export function createAccounts(store, items) {
+export function createAccounts(store, items, invites) {
   const { db, tx } = store;
 
   function normalizeUsername(raw) {
@@ -179,8 +184,9 @@ export function createAccounts(store, items) {
 
   /**
    * 删除账号。要求「它是唯一 owner」的未归档事项为零（那些必须先转移）；
-   * 与别人共享的事项只是把它从 owner 名单里摘掉，事项本身留着。
+   * 与别人共享的事项只是把它从 owner 名单里摘掉（外键级联），事项本身留着。
    * 已归档且只属于它的事项随账号一并删除，数量在返回值里告知。
+   * 会话随账号级联消失（见文件头）：不在这里写 sessions。
    */
   function deleteAccount(actorId, targetId) {
     const target = db.prepare('SELECT id, username, role FROM accounts WHERE id = ?').get(targetId);
@@ -201,10 +207,12 @@ export function createAccounts(store, items) {
     }
 
     const archived = items.countSoleOwnedArchivedItems(target.id);
+    // 它发出的待接受邀请也随它级联消失：被邀请人不是 admin，得单独告诉一声，
+    // 否则他们的角标要等下一次全量重拉才准（删除前问，删除后就查不到了）
+    const orphanedInvitees = invites.pendingInviteesFrom(target.id);
 
     const removed = tx(() => {
       items.deleteSoleOwnedItems(target.id);
-      db.prepare('DELETE FROM sessions WHERE account_id = ?').run(target.id);
       db.prepare('DELETE FROM accounts WHERE id = ?').run(target.id);
       return { ...target, deletedArchivedItems: archived };
     });
@@ -212,8 +220,12 @@ export function createAccounts(store, items) {
     return {
       removed,
       // 账号没了，它的连接立刻断开（走词表的 connections 去向）；
-      // admin 面板再各自刷新名单。
-      changed: [accountDeleted(target.id), adminsChanged('accounts')],
+      // admin 面板再各自刷新名单；被它连累的邀请收件人各收一条定向通知。
+      changed: [
+        accountDeleted(target.id),
+        adminsChanged('accounts'),
+        ...(orphanedInvitees.length ? [accountChanged(orphanedInvitees, 'invites-changed')] : []),
+      ],
     };
   }
 

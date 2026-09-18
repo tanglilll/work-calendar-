@@ -2,6 +2,9 @@
  * 事项的读写与校验。可见性判据在 visibility.js，这里只调用它；
  * 路由层不自行拼 SQL、不自行比对角色。
  *
+ * 「能不能动这条事项」收成一道门：requireItemAccess(actor, itemId, purpose)。
+ * 它同时管访问与「已归档」这件事，invites 也走它——两边不再各判一遍。
+ *
  * owner 是一个名单（见 docs/adr/0002）：成员并列、无主次。
  * 变更描述由 sse.js 的词表构造函数产生——这个 module 不自己拼 to/kind。
  *
@@ -108,6 +111,29 @@ const FIELD_NAMES = ITEM_FIELDS.map((field) => field.name);
 const INSERT_COLUMNS = [...FIELD_NAMES, 'color', 'created_at', 'updated_at', 'progress_updated_at'];
 const INSERT_SQL = `INSERT INTO items (${INSERT_COLUMNS.join(', ')})
     VALUES (${INSERT_COLUMNS.map(() => '?').join(', ')})`;
+
+/**
+ * 门的用途表 —— purpose 的闭集，也是「已归档还让不让动」的**唯一声明处**：
+ * 值是已归档时给的拒绝理由，null 表示放行（只有删除）。
+ *
+ * 为什么把归档政策写在用途旁边：以前「能不能动这条事项」在 items 与 invites
+ * 各判一遍，且两边都只管访问、不管生命周期——给一条已归档事项发邀请因此
+ * 一路通到数据库。现在每个用途都必须在这里交代它对已归档的立场，而表是闭集
+ * （门拒绝表外的 purpose）：新增用途而不写政策，测试会当场逮住。
+ *
+ * delete 放行是**写下来的例外**，不是疏漏：删除的语义是「这事本就不该存在」，
+ * 与它是否完成过无关；归档视图只读、不提供入口，所以这条能力只经 REST 可达。
+ *
+ * read 今天没有调用点（列表在 SQL 侧按 ownerScope 过滤，单条读只在内部），
+ * 留着它是因为它是门接口的一部分：这条「已归档读不到」的规则本身就写在这里。
+ */
+export const ITEM_ACCESS_PURPOSES = Object.freeze({
+  read: '已归档的事项只在归档视图里可见',
+  write: '已归档的事项不可修改',
+  archive: '该事项已经归档',
+  invite: '已归档的事项不可再邀请他人',
+  delete: null,
+});
 
 export function createItems(store, colors) {
   const { db, tx } = store;
@@ -228,12 +254,30 @@ export function createItems(store, colors) {
     return row ? withOwners([row])[0] : undefined;
   }
 
-  /** 读一条事项并要求当前账号有权处置它（名单成员，或 manager/admin）。 */
-  function requireItemAccess(account, id) {
-    const item = getItem(id);
+  /**
+   * 事项的门 —— 「能不能动这条事项」的**唯一落点**：items 与 invites 都走它。
+   *
+   * 两件事一起管：**访问**（是不是这条事项的参与者，判据在 visibility.js，
+   * 这里只问一次）与**生命周期**（已归档的立场写在 ITEM_ACCESS_PURPOSES 里）。
+   * 除 delete 之外，已归档一律拒绝——读不到、改不动、归档不了、也邀请不了别人；
+   * 以前 invites 复刻了一份访问判据、漏了归档检查，邀请就一路通到了数据库。
+   *
+   * 表外的 purpose 直接抛 TypeError，不做默认放行：门是闭集，新增用途必须
+   * 连同它的归档政策一起写进表里。
+   */
+  function requireItemAccess(actor, itemId, purpose) {
+    if (!Object.hasOwn(ITEM_ACCESS_PURPOSES, purpose)) {
+      throw new TypeError(
+        `未知的 purpose=${purpose}：门的用途只有 ${Object.keys(ITEM_ACCESS_PURPOSES).join(' / ')}`,
+      );
+    }
+    const item = getItem(itemId);
     if (!item) throw httpError(404, '事项不存在');
-    if (!canAccessItem(account, item)) {
+    if (!canAccessItem(actor, item)) {
       throw httpError(403, '无权处置他人的事项');
+    }
+    if (item.archived_at && ITEM_ACCESS_PURPOSES[purpose]) {
+      throw httpError(409, ITEM_ACCESS_PURPOSES[purpose]);
     }
     return item;
   }
@@ -278,8 +322,8 @@ export function createItems(store, colors) {
   }
 
   function updateItem(account, id, input) {
-    const current = requireItemAccess(account, id);
-    if (current.archived_at) throw httpError(409, '已归档的事项不可修改');
+    // 门管着「已归档不可改」（write 这一格）：这里不再自己看 archived_at
+    const current = requireItemAccess(account, id, 'write');
 
     const { values, errors } = normalizeItemInput(input, { requireAll: false, current });
     const nextOwnerIds = values.owner_ids ?? null;
@@ -338,8 +382,8 @@ export function createItems(store, colors) {
 
   /** 归档（不可逆）。需要版本匹配，避免覆盖他人刚做的修改。 */
   function archiveItem(account, id, expectedVersion) {
-    const current = requireItemAccess(account, id);
-    if (current.archived_at) throw httpError(409, '该事项已经归档');
+    // 「已经归档」由门拦下（archive 这一格），这里只管版本
+    const current = requireItemAccess(account, id, 'archive');
 
     const version = Number(expectedVersion);
     if (!Number.isInteger(version)) throw httpError(400, '归档时必须带上 version');
@@ -360,50 +404,46 @@ export function createItems(store, colors) {
     return { item, changed: [ownerChanged(item.id, ownerIdsOf(item), 'archived')] };
   }
 
+  /**
+   * 删除：门的 delete 这一格是**唯一放行已归档事项**的用途（理由写在
+   * ITEM_ACCESS_PURPOSES 上面）。归档视图只读、不提供入口，所以这条能力
+   * 只从 REST 接口可达——它以前就在，这里只是把它写进门里。
+   */
   function deleteItem(account, id) {
-    const item = requireItemAccess(account, id);
+    const item = requireItemAccess(account, id, 'delete');
     const info = db.prepare('DELETE FROM items WHERE id = ?').run(id);
     if (info.changes === 0) throw httpError(404, '事项不存在');
     return { item, changed: [ownerChanged(item.id, ownerIdsOf(item), 'deleted')] };
   }
 
   /**
-   * 某账号是**唯一** owner 且未归档的事项数——删账号前必须先把这些转走。
-   * 还有别人的事项不算：那种情况下删账号只是把它从名单里摘掉。
+   * 「某账号是**唯一** owner 的事项」的 WHERE 片段 —— 唯一实现，删账号的三条
+   * 路径共用（删前的门槛、随删的归档计数、以及真正删除）。三条只在**归档条件**
+   * 上分叉：archived 为 true 只算已归档、false 只算未归档、不传两类都算。
+   * 以前这段 EXISTS + `count = 1` 抄了三遍，只有归档那一行不同。
+   *
+   * 片段里只有一个占位符：账号 id。
    */
+  function soleOwnedWhere(archived) {
+    const scope = archived === undefined ? '' : `i.archived_at IS ${archived ? 'NOT NULL' : 'NULL'} AND `;
+    return `${scope}EXISTS (SELECT 1 FROM item_owners m WHERE m.item_id = i.id AND m.account_id = ?)
+      AND (SELECT COUNT(*) FROM item_owners m2 WHERE m2.item_id = i.id) = 1`;
+  }
+
+  /** 某账号是唯一 owner 的未归档事项数——删账号前必须先把这些转走。 */
   function countSoleOwnedActiveItems(accountId) {
-    return db
-      .prepare(
-        `SELECT COUNT(*) AS n FROM items i
-          WHERE i.archived_at IS NULL
-            AND EXISTS (SELECT 1 FROM item_owners m WHERE m.item_id = i.id AND m.account_id = ?)
-            AND (SELECT COUNT(*) FROM item_owners m2 WHERE m2.item_id = i.id) = 1`,
-      )
-      .get(accountId).n;
+    return db.prepare(`SELECT COUNT(*) AS n FROM items i WHERE ${soleOwnedWhere(false)}`).get(accountId).n;
   }
 
   /** 某账号是唯一 owner 的已归档事项数（删账号时它们会一并消失）。 */
   function countSoleOwnedArchivedItems(accountId) {
-    return db
-      .prepare(
-        `SELECT COUNT(*) AS n FROM items i
-          WHERE i.archived_at IS NOT NULL
-            AND EXISTS (SELECT 1 FROM item_owners m WHERE m.item_id = i.id AND m.account_id = ?)
-            AND (SELECT COUNT(*) FROM item_owners m2 WHERE m2.item_id = i.id) = 1`,
-      )
-      .get(accountId).n;
+    return db.prepare(`SELECT COUNT(*) AS n FROM items i WHERE ${soleOwnedWhere(true)}`).get(accountId).n;
   }
 
   /** 删掉某账号是唯一 owner 的全部事项（含已归档）。共享事项由外键级联摘除成员。 */
   function deleteSoleOwnedItems(accountId) {
     return db
-      .prepare(
-        `DELETE FROM items WHERE id IN (
-           SELECT i.id FROM items i
-            WHERE EXISTS (SELECT 1 FROM item_owners m WHERE m.item_id = i.id AND m.account_id = ?)
-              AND (SELECT COUNT(*) FROM item_owners m2 WHERE m2.item_id = i.id) = 1
-         )`,
-      )
+      .prepare(`DELETE FROM items WHERE id IN (SELECT i.id FROM items i WHERE ${soleOwnedWhere()})`)
       .run(accountId).changes;
   }
 
@@ -440,6 +480,7 @@ export function createItems(store, colors) {
 
   return {
     normalizeItemInput,
+    requireItemAccess,
     listItems,
     listArchived,
     getItem,
