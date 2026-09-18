@@ -49,13 +49,9 @@ export function createApi({ items, accounts, sessions, invites }) {
       tags: TAGS,
       palette: PALETTE,
       today: todayLocal(),
-      limits: {
-        titleMax: LIMITS.TITLE_MAX,
-        noteMax: LIMITS.NOTE_MAX,
-        passwordMin: LIMITS.PASSWORD_MIN,
-        usernameMin: LIMITS.USERNAME_MIN,
-        usernameMax: LIMITS.USERNAME_MAX,
-      },
+      // 完整的 LIMITS 一次下发：不再手挑 key —— 手挑漏过 PROGRESS_MAX。
+      // 前端要用的上限都从这里取，新增一条限制只改 config.js。
+      limits: LIMITS,
     });
   }
 

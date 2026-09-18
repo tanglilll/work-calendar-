@@ -7,6 +7,8 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createApp } from '../server/app.js';
+import { ITEM_FIELDS } from '../server/items.js';
+import { TAGS } from '../server/config.js';
 
 const STATUS = (fn, status) =>
   assert.throws(fn, (err) => {
@@ -375,4 +377,81 @@ describe('进展', () => {
     assert.equal(item.progress_updated_at, null, '没进展就不该有更新时间');
     app.close();
   });
+
+  test('更新时清空进展 → 时间戳一并清空（「有进展才有时间戳」）', () => {
+    const { app, admin } = freshWorld();
+    const { item } = app.items.createItem(admin, draft({ progress: '已立项' }));
+    assert.match(item.progress_updated_at, /^\d{4}-\d{2}-\d{2}T/);
+
+    const { item: cleared } = app.items.updateItem(admin, item.id, {
+      progress: '',
+      version: item.version,
+    });
+    assert.equal(cleared.progress, null);
+    assert.equal(cleared.progress_updated_at, null, '进展都没了，更新时间不该留着');
+    app.close();
+  });
+});
+
+/**
+ * 表驱动往返：字段表里每一个可写字段，都要在新建与更新两条写路径上各往返一次。
+ *
+ * 这是这张表的验收判据，也是它存在的理由——「新建路径忘了接线」那类漏写
+ * （21b42ba：新建时填的进展被静默丢掉）会在这里立刻变红，且红的断言点名是哪个字段。
+ * 字段表新增一条而没有样本时，第一条用例直接报出缺哪个字段，不会静默漏过。
+ */
+const FIELD_SAMPLES = {
+  title: { created: '字段表标题', updated: '字段表标题（改）' },
+  event_date: { created: '2026-09-05', updated: '2026-09-10' },
+  due_date: { created: '2026-09-20', updated: '2026-09-25' },
+  tag: { created: TAGS[0], updated: TAGS[1] },
+  progress: { created: '已立项', updated: '接口联调完成' },
+};
+
+/** 基准跨度 09-01 → 09-30：日期样本都落在里面，不触碰「截止不得早于起始」。 */
+const spanDraft = (over) => draft({ event_date: '2026-09-01', due_date: '2026-09-30', ...over });
+
+describe('可写字段表：每个字段的落库往返', () => {
+  test('表的每个可写字段都有样本，样本里没有表外的字段', () => {
+    const names = ITEM_FIELDS.map((field) => field.name);
+    assert.deepEqual(
+      names.filter((name) => !(name in FIELD_SAMPLES)),
+      [],
+      '新增可写字段时必须补一组样本，否则下面的往返断言覆盖不到它',
+    );
+    assert.deepEqual(
+      Object.keys(FIELD_SAMPLES).filter((name) => !names.includes(name)),
+      [],
+      '字段表里已经删掉的字段，样本也要跟着删',
+    );
+    for (const [name, samples] of Object.entries(FIELD_SAMPLES)) {
+      assert.notEqual(samples.created, samples.updated, `${name} 的新建/更新样本必须不同，更新断言才有意义`);
+    }
+  });
+
+  for (const field of ITEM_FIELDS) {
+    const samples = FIELD_SAMPLES[field.name];
+
+    test(`新建带上 ${field.name} → 落库后原样返回`, () => {
+      const { app, admin } = freshWorld();
+      const { item } = app.items.createItem(admin, spanDraft({ [field.name]: samples.created }));
+
+      assert.equal(item[field.name], samples.created, `新建时带上 ${field.name}，落库后应当原样返回`);
+      assert.equal(app.items.getItem(item.id)[field.name], samples.created, '重新读出来仍是这个值');
+      app.close();
+    });
+
+    test(`更新带上 ${field.name} → 落库后原样返回`, () => {
+      const { app, admin } = freshWorld();
+      const { item } = app.items.createItem(admin, spanDraft({ [field.name]: samples.created }));
+      const { item: updated } = app.items.updateItem(admin, item.id, {
+        [field.name]: samples.updated,
+        version: item.version,
+      });
+
+      assert.equal(updated[field.name], samples.updated, `更新时带上 ${field.name}，落库后应当原样返回`);
+      assert.equal(app.items.getItem(item.id)[field.name], samples.updated, '重新读出来仍是这个值');
+      app.close();
+    });
+  }
 });

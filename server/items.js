@@ -18,6 +18,95 @@ const ITEM_COLUMNS = `
 
 const FROM_ITEMS = 'FROM items i';
 
+/**
+ * 派生肖 progress_updated_at 的唯一规则：有进展才记它的更新时间；没有进展
+ * （新建时没填、更新时清空）这一列也是空。新建与更新两条写路径都调它取值。
+ */
+const progressUpdatedAtFor = (progress) =>
+  progress === null || progress === undefined ? null : new Date().toISOString();
+
+/**
+ * 事项可写字段表 —— 「一条事项有哪些可写字段」的唯一落点。
+ *
+ * 每条字段声明四件事：
+ * - name：字段名，同时也是 SQL 列名；新建的 INSERT 与更新的动态 SET 都按它拼，
+ *   写入层不再手写列清单（`21b42ba` 那次「新建时填的进展被静默丢掉」正是手写清单
+ *   与校验层脱钩的产物）；
+ * - parse(raw)：解析并校验一个值，返回 { value } 或 { error }；
+ * - requiredOnCreate：新建时缺了它算不算字段错误（更新是部分更新，没带就不动这列）；
+ * - default：新建时没带的可选字段用什么值补齐。
+ *
+ * 两类东西刻意不在表里：
+ * - owner_ids 写的是 item_owners（另一张表），语义是「名单」而不是行上的列：
+ *   它的校验留在 normalizeItemInput 的收尾处、写入留在 writeOwners；
+ * - progress_updated_at 是派生肖，不是调用方能写的字段，规则见 progressUpdatedAtFor。
+ *
+ * DB schema 不由这张表生成（见工单 01 被否掉的方案）：db.js 继续手写建表，
+ * 表与 schema 的对齐由 test/items.test.js 的表驱动往返断言守住。
+ */
+export const ITEM_FIELDS = [
+  {
+    name: 'title',
+    requiredOnCreate: true,
+    parse(raw) {
+      if (typeof raw !== 'string') return { error: '标题必须是文本' };
+      const title = raw.trim();
+      if (!title) return { error: '标题不能为空' };
+      if (title.length > LIMITS.TITLE_MAX) return { error: `标题最多 ${LIMITS.TITLE_MAX} 个字符` };
+      return { value: title };
+    },
+  },
+  {
+    name: 'event_date',
+    requiredOnCreate: true,
+    parse(raw) {
+      if (!isValidDateString(raw)) return { error: '起始日期格式须为 yyyy-mm-dd 的真实日期' };
+      return { value: raw };
+    },
+  },
+  {
+    name: 'due_date',
+    requiredOnCreate: true,
+    parse(raw) {
+      if (!isValidDateString(raw)) return { error: '截止日期格式须为 yyyy-mm-dd 的真实日期' };
+      return { value: raw };
+    },
+  },
+  {
+    name: 'tag',
+    requiredOnCreate: false,
+    default: null,
+    parse(raw) {
+      if (raw === null || raw === '') return { value: null };
+      if (!isTagAllowed(raw)) return { error: `标签必须取自白名单：${TAGS.join('、')}` };
+      return { value: raw };
+    },
+  },
+  {
+    name: 'progress',
+    requiredOnCreate: false,
+    default: null,
+    // 一段自由文本，覆盖式更新，不保留历史（见 CONTEXT.md「进展」）
+    parse(raw) {
+      if (raw === null || raw === '') return { value: null };
+      if (typeof raw !== 'string') return { error: '进展必须是文本' };
+      const progress = raw.trim();
+      if (progress.length > LIMITS.PROGRESS_MAX) {
+        return { error: `进展最多 ${LIMITS.PROGRESS_MAX} 个字符` };
+      }
+      return { value: progress || null };
+    },
+  },
+];
+
+/** 字段表给出的列名：写入层照它拼 SQL。 */
+const FIELD_NAMES = ITEM_FIELDS.map((field) => field.name);
+
+/** 新建时还要一并写入的、由路径自己产生的列：颜色与三个时间戳。 */
+const INSERT_COLUMNS = [...FIELD_NAMES, 'color', 'created_at', 'updated_at', 'progress_updated_at'];
+const INSERT_SQL = `INSERT INTO items (${INSERT_COLUMNS.join(', ')})
+    VALUES (${INSERT_COLUMNS.map(() => '?').join(', ')})`;
+
 export function createItems(store, colors) {
   const { db, tx } = store;
 
@@ -58,59 +147,31 @@ export function createItems(store, colors) {
 
   /**
    * 校验并归一化事项输入。requireAll=true 时所有必填字段都必须出现（新建）；
-   * 否则只校验出现的字段（部分更新）。current 是这条事项的现有值——部分更新时
-   * 用它补齐没传的字段，否则「截止不得早于起始」这条不变量会漏判。
+   * 否则只校验出现的字段（部分更新）。字段清单与每条字段的解析/校验全部来自
+   * ITEM_FIELDS —— 这里只做「按表走一遍」，新增可写字段不必改这个函数。
+   * current 是这条事项的现有值——部分更新时用它补齐没传的字段，否则
+   * 「截止不得早于起始」这条不变量会漏判。
    */
   function normalizeItemInput(input, { requireAll, current = null }) {
     const errors = {};
     const values = {};
 
-    if (requireAll || input.title !== undefined) {
-      if (typeof input.title !== 'string') {
-        errors.title = '标题必须是文本';
-      } else {
-        const t = input.title.trim();
-        if (!t) errors.title = '标题不能为空';
-        else if (t.length > LIMITS.TITLE_MAX) errors.title = `标题最多 ${LIMITS.TITLE_MAX} 个字符`;
-        else values.title = t;
+    for (const field of ITEM_FIELDS) {
+      if (input[field.name] === undefined) {
+        if (!requireAll) continue; // 部分更新：没带就不动这一列
+        if (!field.requiredOnCreate) {
+          values[field.name] = field.default; // 新建：可选字段缺省时用默认值补齐
+          continue;
+        }
       }
+      const { value, error } = field.parse(input[field.name]);
+      if (error !== undefined) errors[field.name] = error;
+      else values[field.name] = value;
     }
 
-    if (requireAll || input.event_date !== undefined) {
-      if (!isValidDateString(input.event_date)) errors.event_date = '起始日期格式须为 yyyy-mm-dd 的真实日期';
-      else values.event_date = input.event_date;
-    }
-
-    if (requireAll || input.due_date !== undefined) {
-      if (!isValidDateString(input.due_date)) errors.due_date = '截止日期格式须为 yyyy-mm-dd 的真实日期';
-      else values.due_date = input.due_date;
-    }
-
-    if (input.tag !== undefined) {
-      const raw = input.tag;
-      if (raw === null || raw === '') values.tag = null;
-      else if (!isTagAllowed(raw)) errors.tag = `标签必须取自白名单：${TAGS.join('、')}`;
-      else values.tag = raw;
-    } else if (requireAll) {
-      values.tag = null;
-    }
-
-    // 进展：一段自由文本，覆盖式更新，不保留历史（见 CONTEXT.md「进展」）
-    if (input.progress !== undefined) {
-      if (input.progress === null || input.progress === '') {
-        values.progress = null;
-      } else if (typeof input.progress !== 'string') {
-        errors.progress = '进展必须是文本';
-      } else {
-        const p = input.progress.trim();
-        if (p.length > LIMITS.PROGRESS_MAX) errors.progress = `进展最多 ${LIMITS.PROGRESS_MAX} 个字符`;
-        else values.progress = p || null;
-      }
-    } else if (requireAll) {
-      values.progress = null;
-    }
-
-    // owner 名单：必须是非空、去重、且账号都存在的 id 数组
+    // owner_ids 不在字段表里（见表的说明）：它写的是 item_owners，语义是「名单」
+    // 而不是 items 行上的列，所以校验与写入仍留在表外。
+    // 必须是非空、去重、且账号都存在的 id 数组
     if (input.owner_ids !== undefined) {
       if (!Array.isArray(input.owner_ids) || input.owner_ids.length === 0) {
         errors.owner_ids = 'owner 名单至少要有一个人';
@@ -201,27 +262,17 @@ export function createItems(store, colors) {
     const now = new Date().toISOString();
     const item = tx(() => {
       const color = colors.pickColor();
-      // 进展在新建路径同样要落库（校验层已经备好了值，写入层不能漏掉它，
-      // 否则用户填了进展、界面也发了，保存回来却是空的）。语义与更新路径一致：
-      // 有进展才记下它的更新时间，没进展两列都是空。
-      const progress = values.progress ?? null;
-      const progressUpdatedAt = progress === null ? null : now;
+      // 列清单与取值顺序都从字段表派生（INSERT_SQL / FIELD_NAMES），写入层没有
+      // 可漏的手写清单——校验层备好的每个字段都会原样落库（21b42ba 的根因）。
+      // 参数顺序与 INSERT_COLUMNS 一致：先是字段表，然后是 color 与三个时间戳。
       const info = db
-        .prepare(
-          `INSERT INTO items
-             (title, event_date, due_date, tag, progress, progress_updated_at, color, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
+        .prepare(INSERT_SQL)
         .run(
-          values.title,
-          values.event_date,
-          values.due_date,
-          values.tag,
-          progress,
-          progressUpdatedAt,
+          ...FIELD_NAMES.map((name) => values[name]),
           color,
           now,
           now,
+          progressUpdatedAtFor(values.progress),
         );
       const id = Number(info.lastInsertRowid);
       writeOwners(id, ownerIds);
@@ -251,14 +302,17 @@ export function createItems(store, colors) {
       const now = new Date().toISOString();
       const sets = [];
       const params = [];
-      for (const [key, value] of Object.entries(values)) {
-        sets.push(`${key} = ?`);
-        params.push(value);
+      // 动态 SET 同样从字段表派生：表里有哪些可写列，这里就能改哪些列。
+      for (const field of ITEM_FIELDS) {
+        if (!(field.name in values)) continue;
+        sets.push(`${field.name} = ?`);
+        params.push(values[field.name]);
       }
-      // 改写进展时顺手记下它是什么时候写的
+      // 派生肖跟随 progress 一起写：有进展才有时间戳，清空进展则时间戳也清空
+      // （规则唯一实现在 progressUpdatedAtFor，新建路径调的是同一个）
       if ('progress' in values) {
         sets.push('progress_updated_at = ?');
-        params.push(now);
+        params.push(progressUpdatedAtFor(values.progress));
       }
       sets.push('version = version + 1', 'updated_at = ?');
       params.push(now);
