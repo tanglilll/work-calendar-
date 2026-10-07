@@ -7,9 +7,12 @@
  * 三条口径要一起看（口径本身不落库，全部由前端从既有字段推导）：
  *
  * - **状态**：已归档 → 已完成；否则按「今天」与起止日期分成 待开始 / 已逾期 / 进行中。
- *   注意「截止当天即算已逾期」——这与侧栏的逾期基线（README「侧栏三个面板的口径」）同源：
- *   两边都是 `due_date <= 今天`。这条判据在仓库里有两处实现，test/tableview.test.js 用
- *   「statusOf 判为已逾期的集合 === sidebar.computeGroups 的逾期基线集合」把分叉钉红。
+ *   **截止当天算「进行中」**：已逾期只到「`due_date < 今天`」为止。这与侧栏「截止提醒」里
+ *   「已逾期」那一组的判据（sidebar.js 的 `due_date < 今天`）同源——侧栏把截止当天单列成
+ *   「今天截止」，状态列则把它算进「进行中」，两边都不把它当逾期。这条判据在仓库里有两处实现，
+ *   test/tableview.test.js 用「statusOf 判为已逾期的集合 === sidebar 的 overdue 组」把分叉钉红。
+ *   （注意别与 README 的「逾期基线」`due_date <= 今天` 混起来：那是侧栏面板汇总计数用的并集，
+ *   不是「逾期」的定义。）
  * - **今天**一律取 state.today（服务端视图下发的同一天），这里不自己 new Date()——
  *   否则每个浏览器各算各的「今天」，跨时区/跨午夜就对不上。
  * - **归档时间**（archived_at）是 UTC ISO 串，展示一律换本机日期（util.js:34 的约定，
@@ -56,6 +59,30 @@ export const LATE = '逾期交付';
 /** 未标注象限的分组键，也是筛选下拉里「未标注」那一项的值。 */
 export const UNLABELED = '未标注';
 
+/**
+ * 紧急重要度 → 色号类名。与 STATUS_CLASS 同一取向：只用颜色区分，不做装饰。
+ * 键是服务端白名单里的字面量与「未标注」；**按值配、不按下标**，所以调整 QUADRANTS 的次序
+ * 不会串色。这里确实是前端第二处出现那四个字面量——测试拿 server/config.js 的 QUADRANTS
+ * 逐值核一遍，改名时红在测试里，而不是悄悄丢掉颜色（见 test/tableview.test.js）。
+ */
+export const QUADRANT_CLASS = Object.freeze({
+  重要且紧急: 'q-do',
+  紧急但不重要: 'q-delegate',
+  重要不紧急: 'q-plan',
+  不紧急不重要: 'q-drop',
+  [UNLABELED]: 'q-none',
+});
+
+/** 象限的色号类名；白名单之外的取值（不该出现）不给色，不猜。 */
+export function quadrantClass(quadrant) {
+  return QUADRANT_CLASS[quadrant] ?? '';
+}
+
+/** 行内徽章的类名：「pill」+ 色号（白名单之外的取值就只剩 pill，不留悬空空格）。 */
+export function quadrantPillClass(quadrant) {
+  return ['pill', quadrantClass(quadrant)].filter(Boolean).join(' ');
+}
+
 /** 归档行单独成一组（不参与象限分组），殿后。 */
 export const ARCHIVED_GROUP = '已归档（只读）';
 
@@ -90,12 +117,14 @@ function dayNumber(date) {
 
 /**
  * 任务状态。已归档即「已完成」（归档是本项目的终态与完成态，见 CONTEXT.md）；
- * 其余按今天分桶；`today >= due_date` 就是逾期基线，截止当天算已逾期。
+ * 其余按今天分桶：还没开始 → 待开始；截止日期已过（`今天 > due_date`）→ 已逾期；
+ * 其余（含**截止当天**）→ 进行中。「截止当天算进行中」是产品口径（用户 2026-10-07 指定），
+ * 也与侧栏「截止提醒」里「已逾期」那一组同源——那边同样是 `due_date < 今天`。
  */
 export function statusOf(item, today) {
   if (item.archived_at) return STATUS.done;
   if (today < item.event_date) return STATUS.todo;
-  if (today >= item.due_date) return STATUS.overdue;
+  if (today > item.due_date) return STATUS.overdue;
   return STATUS.doing;
 }
 
@@ -305,14 +334,16 @@ function rowHtml(item, view) {
       <td>${dash(item.event_date)}</td>
       <td>${dash(item.due_date)}</td>
       <td>${dash(actualDoneDate(item))}</td>
-      <td>${quadrant ? `<span class="pill">${esc(quadrant)}</span>` : '—'}</td>
+      <td>${quadrant ? `<span class="${quadrantPillClass(quadrant)}">${esc(quadrant)}</span>` : '—'}</td>
     </tr>`;
 }
 
 function groupHeadHtml(group, collapsed) {
+  // 组头与行内徽章共用同一套色号：一列扫下来，颜色就是象限（归档组与白名单外的值没有色号）
+  const nameClass = ['group-name', quadrantClass(group.quadrant)].filter(Boolean).join(' ');
   return `<tr class="group-row" data-quadrant-toggle="${esc(group.quadrant)}" title="点击折叠 / 展开">
       <td colspan="${COLUMNS.length}">
-        <span class="group-caret">${collapsed ? '▸' : '▾'}</span>${esc(group.quadrant)}
+        <span class="group-caret">${collapsed ? '▸' : '▾'}</span><span class="${nameClass}">${esc(group.quadrant)}</span>
         <span class="count">记录数 ${group.items.length}</span>
       </td>
     </tr>`;

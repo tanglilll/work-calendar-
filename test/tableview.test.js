@@ -3,9 +3,10 @@
  * 分组顺序与记录数、筛选与排序、以及一屏渲染的空态、组头与底部统计。
  *
  * 期望值在测试里独立算一遍（自己的日期算术、自己的集合运算），不借用被测实现。
- * 一条要点名的断言：`statusOf` 判为「已逾期」的集合必须**恰好等于** sidebar 的逾期基线
- * （`due_date <= 今天`，README「侧栏三个面板的口径」）——这条口径在仓库里有两处实现，
- * 分叉了必须在这里红，而不是只在浏览器里看得出来。
+ * 一条要点名的断言：`statusOf` 判为「已逾期」的集合必须**恰好等于** sidebar 的 `overdue` 组
+ * （`due_date < 今天`）——这条口径在仓库里有两处实现，分叉了必须在这里红，而不是只在浏览器里看得出来。
+ * 别与 README 的「逾期基线」（`due_date <= 今天`，侧栏面板汇总计数用的并集）混起来：
+ * 基线 = 侧栏的「已逾期」+「今天截止」两组，截止当天归「今天截止」，状态列把它算「进行中」。
  *
  * 归档时间那条用固定 ISO 串钉「本机日期」口径：本仓库开发机是 UTC+8，
  * `archived_at.slice(0,10)` 取的是 UTC 日期，本机 00:00–07:59 归档的会差一天，
@@ -27,7 +28,9 @@ import {
   groupByQuadrant,
   onTimeOf,
   percentDoneOf,
+  quadrantClass,
   quadrantOptions,
+  quadrantPillClass,
   renderTable,
   renderTableRows,
   sortRows,
@@ -37,6 +40,7 @@ import {
   toolbarHtml,
 } from '../public/tableview.js';
 import { computeGroups } from '../public/sidebar.js';
+import { QUADRANTS } from '../server/config.js';
 
 const TODAY = '2026-09-10';
 const DAY = 24 * 60 * 60 * 1000;
@@ -88,8 +92,8 @@ const rowHtmlOf = (html, id) => {
 };
 
 describe('statusOf：状态由归档 + 今天 + 起止日期推导', () => {
-  test('截止当天算已逾期（与侧栏的逾期基线同源）', () => {
-    assert.equal(statusOf(make(1, { event_date: '2026-09-01', due_date: TODAY }), TODAY), STATUS.overdue);
+  test('截止当天算进行中（已逾期只到「截止日期已过」为止）', () => {
+    assert.equal(statusOf(make(1, { event_date: '2026-09-01', due_date: TODAY }), TODAY), STATUS.doing);
   });
 
   test('昨天截止已逾期、明天截止进行中、明天开始待开始', () => {
@@ -99,7 +103,7 @@ describe('statusOf：状态由归档 + 今天 + 起止日期推导', () => {
   });
 
   test('起始当天是进行中（待开始只到「今天 < 起始」为止）', () => {
-    assert.equal(statusOf(make(1, { event_date: TODAY, due_date: TODAY }), TODAY), STATUS.overdue, '当天起当天止：截止优先');
+    assert.equal(statusOf(make(1, { event_date: TODAY, due_date: TODAY }), TODAY), STATUS.doing, '当天起当天止：还在做');
     assert.equal(statusOf(make(2, { event_date: TODAY, due_date: '2026-09-12' }), TODAY), STATUS.doing);
   });
 
@@ -108,7 +112,7 @@ describe('statusOf：状态由归档 + 今天 + 起止日期推导', () => {
     assert.equal(statusOf(archived, TODAY), STATUS.done);
   });
 
-  test('已逾期的集合 === sidebar 的逾期基线（两组：已逾期 + 今天截止）', () => {
+  test('已逾期的集合 === sidebar 的 overdue 组（两边都不把截止当天算逾期）', () => {
     const rows = [
       make(1, { event_date: '2026-09-08', due_date: '2026-09-08' }),
       make(2, { event_date: '2026-09-10', due_date: '2026-09-10' }),
@@ -118,8 +122,12 @@ describe('statusOf：状态由归档 + 今天 + 起止日期推导', () => {
     const { overdue, dueToday } = computeGroups(rows, TODAY);
     const mine = rows.filter((r) => statusOf(r, TODAY) === STATUS.overdue);
 
-    assert.deepEqual(idList(mine), idList([...overdue, ...dueToday]), '两处逾期判据必须同源');
-    assert.deepEqual(idList(mine), idList(rows.filter((r) => r.due_date <= TODAY)));
+    assert.deepEqual(idList(mine), idList(overdue), '两处逾期判据必须同源');
+    assert.deepEqual(idList(mine), idList(rows.filter((r) => r.due_date < TODAY)));
+    for (const row of dueToday) {
+      assert.ok(statusOf(row, TODAY) !== STATUS.overdue, '今天截止的那条不能被算作逾期');
+    }
+    assert.equal(statusOf(dueToday[0], TODAY), STATUS.doing, '今天截止 → 进行中（id 2 当天起当天止）');
   });
 });
 
@@ -271,8 +279,9 @@ describe('filterRows：状态 / 象限 / 关键词', () => {
   ];
 
   test('状态筛选按派生状态（含已逾期）', () => {
-    assert.deepEqual(idList(filterRows(rows, { today: TODAY, status: STATUS.overdue })), [1, 3]);
-    assert.deepEqual(idList(filterRows(rows, { today: TODAY, status: STATUS.doing })), [2]);
+    // id 1 截止在昨天 → 已逾期；id 3 截止就是今天 → 进行中（截止当天不算逾期，见 statusOf）
+    assert.deepEqual(idList(filterRows(rows, { today: TODAY, status: STATUS.overdue })), [1]);
+    assert.deepEqual(idList(filterRows(rows, { today: TODAY, status: STATUS.doing })), [2, 3]);
     assert.deepEqual(idList(filterRows(rows, { today: TODAY, status: '' })), [1, 2, 3]);
   });
 
@@ -481,6 +490,39 @@ describe('tableModel / tableHtml：分组、记录数与底部统计', () => {
 
     assert.ok(!html.includes('<img src=x'));
     assert.ok(html.includes('&lt;img src=x onerror=alert(1)&gt;'));
+  });
+});
+
+/**
+ * 象限的色号：行内徽章与组头字样共用同一套。
+ *
+ * 这里有一处前端的字面量副本（QUADRANT_CLASS 的键就是白名单的值），所以第一条用例拿
+ * server/config.js 的 QUADRANTS **逐值核一遍**——象限改名或增删时红在这里，
+ * 而不是在界面上悄悄少了一种颜色。色号按值配、与顺序无关：调整 QUADRANTS 的次序不串色。
+ */
+describe('象限色号：白名单每个取值一种颜色，行内与组头共用', () => {
+  /** 这个 describe 自己一份 view 替身：只需要 today（白名单由行里的值本身给出）。 */
+  const viewWith = (over = {}) => ({ today: TODAY, ...over });
+
+  test('白名单里每个取值都有色号；白名单之外不给色，不猜', () => {
+    for (const q of QUADRANTS) assert.ok(quadrantClass(q), `「${q}」没有色号`);
+    assert.ok(quadrantClass(UNLABELED), '「未标注」也要有色号');
+    assert.equal(quadrantClass('不在白名单里的值'), '');
+    assert.equal(quadrantPillClass('不在白名单里的值'), 'pill', '没有色号时只剩 pill，不留悬空空格');
+  });
+
+  test('五种取值五种颜色，没有两种象限共用一色', () => {
+    const classes = [...QUADRANTS, UNLABELED].map(quadrantClass);
+    assert.equal(new Set(classes).size, classes.length, '颜色重复等于没标注');
+  });
+
+  test('行内徽章与组头字样都带上同一个色号类', () => {
+    const html = tableHtml(viewWith({ items: [make(1, { quadrant: QUADRANTS[0] })] }));
+    const cls = quadrantClass(QUADRANTS[0]);
+
+    assert.ok(html.includes(`<span class="pill ${cls}">`), '行内徽章带色号');
+    assert.ok(html.includes(`<span class="group-name ${cls}">`), '组头字样带同一色号');
+    assert.ok(html.includes(`${cls}`) && html.includes(`${QUADRANTS[0]}</span>`), '字还是那个字，只是换了颜色');
   });
 });
 

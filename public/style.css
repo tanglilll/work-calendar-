@@ -481,6 +481,15 @@ table.data tr.archived td { color: var(--muted); }
 .pill.ontime { border-color: #bfe3cf; color: #157347; }
 .pill.late { border-color: #f0c6c6; color: var(--danger); }
 
+/* 紧急重要度的色号：四象限各一色 + 未标注灰，行内徽章与组头字样共用同一套。
+   按「要多快处理」上色，越靠前越重：马上做（红）→ 分出去（橙）→ 排期（蓝）→ 放着（绿）。
+   规则按值配（见 tableview.js 的 QUADRANT_CLASS），与白名单次序无关，调整次序不会串色。 */
+.q-do { color: var(--danger); border-color: #f0c6c6; }
+.q-delegate { color: var(--warn); border-color: #f6ddc3; }
+.q-plan { color: var(--accent); border-color: #cbd9f6; }
+.q-drop { color: #157347; border-color: #bfe3cf; }
+.q-none { color: var(--muted); }
+
 /* ---------- 提示条 ---------- */
 
 .toast {
