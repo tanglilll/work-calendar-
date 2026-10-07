@@ -6,3 +6,6 @@ node_modules/
 
 # Reasonix 宿主在 workspace 里生成的会话数据
 .reasonix/
+
+# ZCode 宿主在工作区里生成的运行数据：动态工作流的草稿脚本等（机器产物，不是项目的源码）
+.zcode/
