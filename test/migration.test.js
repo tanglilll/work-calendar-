@@ -49,6 +49,45 @@ function oldShapeDb(path) {
   db.close();
 }
 
+/**
+ * 造一个「当前 schema 减去两列」的库：有 progress，还没有 percent_done / quadrant。
+ * 这是当前 schema 的库（含 data/ 下的 demo 库）升级时会走的路径。
+ */
+function progressEraDb(path) {
+  const db = new DatabaseSync(path);
+  db.exec(`
+    CREATE TABLE accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL CHECK (role IN ('user','manager','admin')),
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      event_date TEXT NOT NULL,
+      due_date TEXT NOT NULL,
+      tag TEXT,
+      color INTEGER NOT NULL,
+      archived_at TEXT,
+      version INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      progress TEXT,
+      progress_updated_at TEXT,
+      CHECK (due_date >= event_date),
+      CHECK (color >= 0 AND color <= 11),
+      CHECK (length(trim(title)) > 0)
+    );
+    INSERT INTO accounts (username, password_hash, role, created_at) VALUES
+      ('admin', 'x', 'admin', '2026-01-01');
+    INSERT INTO items (title, event_date, due_date, tag, color, archived_at, version, created_at, updated_at, progress, progress_updated_at) VALUES
+      ('升级前的事项', '2026-09-01', '2026-09-02', '工作', 0, NULL, 1, '2026-01-01', '2026-01-01', '进行中', '2026-01-02');
+  `);
+  db.close();
+}
+
 /** 临时库房：Windows 上句柄没释放时目录删不掉，所以清理要容错，别掩盖真正的断言错误。 */
 function withTempDir(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'rili-migration-'));
@@ -87,6 +126,8 @@ test('老库迁移：归属回填成名单，事项一条不少，再开一次�
     const columns = store.db.prepare('PRAGMA table_info(items)').all().map((c) => c.name);
     assert.ok(!columns.includes('owner_id'), '旧列应当被去掉，避免出现两个真相来源');
     assert.ok(columns.includes('progress'), '后加的列也要在迁移后的表上');
+    assert.ok(columns.includes('percent_done'), '完成度一列也要在迁移后的表上');
+    assert.ok(columns.includes('quadrant'), '紧急重要度一列也要在迁移后的表上');
 
     const items = store.db.prepare('SELECT id, title, version, archived_at FROM items ORDER BY id').all();
     assert.deepEqual(
@@ -121,6 +162,46 @@ test('新库不需要迁移', () => {
     assert.equal(store.migration.migrated, false);
     const columns = store.db.prepare('PRAGMA table_info(items)').all().map((c) => c.name);
     assert.ok(columns.includes('progress'));
+    assert.ok(columns.includes('percent_done'));
+    assert.ok(columns.includes('quadrant'));
     assert.ok(!columns.includes('owner_id'));
+  });
+});
+
+/**
+ * 从「已经有 progress、还没有 percent_done / quadrant」的库升级：这是当前 schema
+ * 的库（含 data/ 下的 demo 库）真实会走的路径。两列若被塞进 progress 那道门里，
+ * 这条用例会红：PRAGMA 里看不到两列，随后按 ITEM_COLUMNS 的读法
+ * （SELECT i.percent_done FROM items i）直接抛 no such column。
+ */
+test('已有 progress、无新列的老库：打开后两列都在，能读能写', () => {
+  withTempDir((path, track) => {
+    progressEraDb(path);
+
+    const store = track(openDb(path));
+    const columns = store.db.prepare('PRAGMA table_info(items)').all().map((c) => c.name);
+    assert.ok(columns.includes('percent_done'), '已有 progress 的库也要补上完成度');
+    assert.ok(columns.includes('quadrant'), '已有 progress 的库也要补上紧急重要度');
+
+    // 用领域层的列名读法验证：列不在时这里直接抛 no such column
+    const before = store.db
+      .prepare('SELECT i.percent_done, i.quadrant FROM items i WHERE i.id = 1')
+      .get();
+    assert.equal(before.percent_done, null, '老数据的两列都是空');
+    assert.equal(before.quadrant, null);
+
+    store.db
+      .prepare('UPDATE items SET percent_done = ?, quadrant = ? WHERE id = 1')
+      .run(50, '重要不紧急');
+    const after = store.db
+      .prepare('SELECT i.percent_done, i.quadrant FROM items i WHERE i.id = 1')
+      .get();
+    assert.equal(after.percent_done, 50, '补上的列能写也能读');
+    assert.equal(after.quadrant, '重要不紧急');
+    assert.equal(
+      store.db.prepare('SELECT progress FROM items WHERE id = 1').get().progress,
+      '进行中',
+      '补列不动老数据',
+    );
   });
 });

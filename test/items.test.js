@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 
 import { createApp } from '../server/app.js';
 import { ITEM_FIELDS } from '../server/items.js';
-import { TAGS } from '../server/config.js';
+import { LIMITS, TAGS, QUADRANTS } from '../server/config.js';
 
 const STATUS = (fn, status) =>
   assert.throws(fn, (err) => {
@@ -393,6 +393,140 @@ describe('进展', () => {
   });
 });
 
+describe('完成度与紧急重要度', () => {
+  test('新建不带两项时默认未填（null）', () => {
+    const { app, admin } = freshWorld();
+    const { item } = app.items.createItem(admin, draft());
+
+    assert.equal(item.percent_done, null, '完成度默认未填');
+    assert.equal(item.quadrant, null, '紧急重要度默认未标注');
+    app.close();
+  });
+
+  test('完成度接受 0 与 100 两个边界，0 不算「没填」', () => {
+    const { app, admin } = freshWorld();
+    const { item: atMin } = app.items.createItem(admin, draft({ percent_done: 0 }));
+    assert.equal(atMin.percent_done, 0, '0 是合法的完成度，不能被当成没填');
+
+    const { item: atMax } = app.items.createItem(
+      admin,
+      draft({ percent_done: LIMITS.PERCENT_DONE_MAX }),
+    );
+    assert.equal(atMax.percent_done, 100);
+    app.close();
+  });
+
+  test('完成度接受数字字符串（对话框提交的就是字符串）', () => {
+    const { app, admin } = freshWorld();
+    const { item } = app.items.createItem(admin, draft({ percent_done: '50' }));
+    assert.equal(item.percent_done, 50, '落库的是数字，读出来还是数字');
+
+    const { item: updated } = app.items.updateItem(admin, item.id, {
+      percent_done: '75',
+      version: item.version,
+    });
+    assert.equal(updated.percent_done, 75);
+    app.close();
+  });
+
+  test('完成度的越界与非整数都是字段错误，且不落库', () => {
+    const { app, admin } = freshWorld();
+    for (const bad of [-1, 101, 50.5, 'abc']) {
+      try {
+        app.items.createItem(admin, draft({ percent_done: bad }));
+        assert.fail(`percent_done=${bad} 应当抛错`);
+      } catch (err) {
+        assert.equal(err.status, 400, `percent_done=${bad} 应当是字段错误`);
+        assert.equal(err.fields.percent_done, '完成度必须是 0–100 的整数');
+      }
+    }
+    assert.equal(app.items.listItems(admin).length, 0, '非法输入不该留下任何事项');
+
+    const { item } = app.items.createItem(admin, draft({ percent_done: 50 }));
+    try {
+      app.items.updateItem(admin, item.id, { percent_done: 101, version: item.version });
+      assert.fail('更新路径也应当抛错');
+    } catch (err) {
+      assert.equal(err.status, 400, '部分更新同样走字段表校验');
+      assert.equal(err.fields.percent_done, '完成度必须是 0–100 的整数');
+    }
+    assert.equal(app.items.getItem(item.id).percent_done, 50, '不合法就不该落库');
+    app.close();
+  });
+
+  test('完成度与象限：没带就不动，空串视为清空', () => {
+    const { app, admin } = freshWorld();
+    const { item } = app.items.createItem(
+      admin,
+      draft({ percent_done: 60, quadrant: QUADRANTS[2] }),
+    );
+
+    const { item: retitled } = app.items.updateItem(admin, item.id, {
+      title: '换个标题',
+      version: item.version,
+    });
+    assert.equal(retitled.percent_done, 60, '没带的字段保持原值');
+    assert.equal(retitled.quadrant, QUADRANTS[2]);
+
+    const { item: cleared } = app.items.updateItem(admin, item.id, {
+      percent_done: '',
+      version: retitled.version,
+    });
+    assert.equal(cleared.percent_done, null, '空串视为清空');
+    assert.equal(cleared.quadrant, QUADRANTS[2], '只清完成度，不动象限');
+    app.close();
+  });
+
+  test('紧急重要度接受四个字面量', () => {
+    const { app, admin } = freshWorld();
+    for (const quadrant of QUADRANTS) {
+      const { item } = app.items.createItem(admin, draft({ quadrant }));
+      assert.equal(item.quadrant, quadrant, `应当收下白名单里的「${quadrant}」`);
+    }
+    app.close();
+  });
+
+  test('紧急重要度不在白名单 → 字段错误里列出四个合法值', () => {
+    const { app, admin } = freshWorld();
+    try {
+      app.items.createItem(admin, draft({ quadrant: '重要' }));
+      assert.fail('应当抛错');
+    } catch (err) {
+      assert.equal(err.status, 400);
+      assert.equal(err.fields.quadrant, `紧急重要度必须取自白名单：${QUADRANTS.join('、')}`);
+      for (const quadrant of QUADRANTS) {
+        assert.ok(err.fields.quadrant.includes(quadrant), `错误信息里要列出「${quadrant}」`);
+      }
+    }
+    app.close();
+  });
+
+  test('紧急重要度留空 → 未标注（null）', () => {
+    const { app, admin } = freshWorld();
+    const { item } = app.items.createItem(admin, draft({ quadrant: '' }));
+    assert.equal(item.quadrant, null);
+    app.close();
+  });
+
+  test('列表与归档列表都带着两列（共用同一份 ITEM_COLUMNS）', () => {
+    const { app, admin } = freshWorld();
+    const { item } = app.items.createItem(
+      admin,
+      draft({ percent_done: 30, quadrant: QUADRANTS[3] }),
+    );
+
+    const [listed] = app.items.listItems(admin);
+    assert.equal(listed.percent_done, 30, '列表读法也要带出完成度');
+    assert.equal(listed.quadrant, QUADRANTS[3]);
+
+    app.items.archiveItem(admin, item.id, item.version);
+    const [archived] = app.items.listArchived(admin);
+    assert.equal(archived.percent_done, 30, '归档列表用的是同一个列清单');
+    assert.equal(archived.quadrant, QUADRANTS[3]);
+    app.close();
+  });
+});
+
 /**
  * 表驱动往返：字段表里每一个可写字段，都要在新建与更新两条写路径上各往返一次。
  *
@@ -406,6 +540,9 @@ const FIELD_SAMPLES = {
   due_date: { created: '2026-09-20', updated: '2026-09-25' },
   tag: { created: TAGS[0], updated: TAGS[1] },
   progress: { created: '已立项', updated: '接口联调完成' },
+  // 0 是合法取值、不是「没填」，用 0 做新建样本正好把这条钉在往返里
+  percent_done: { created: 0, updated: LIMITS.PERCENT_DONE_MAX },
+  quadrant: { created: QUADRANTS[0], updated: QUADRANTS[1] },
 };
 
 /** 基准跨度 09-01 → 09-30：日期样本都落在里面，不触碰「截止不得早于起始」。 */

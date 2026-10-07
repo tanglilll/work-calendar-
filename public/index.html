@@ -52,10 +52,17 @@
   <header class="topbar">
     <div class="brand">工作日历</div>
 
-    <div class="month-nav">
+    <div class="month-nav" id="month-nav">
       <button type="button" data-nav="prev" title="上一月">‹</button>
       <span id="month-label" class="month-label"></span>
       <button type="button" data-nav="next" title="下一月">›</button>
+    </div>
+
+    <!-- 视图切换：日历（默认）与表格。状态在 app.js 的 createState() 里（本地视图），
+         切换只改 state.view 再重绘，不碰装载器 -->
+    <div class="view-switch" id="view-switch" role="group" aria-label="视图切换">
+      <button type="button" class="is-active" data-view="calendar">日历</button>
+      <button type="button" data-view="table">表格</button>
     </div>
 
     <div class="topbar-right">
@@ -67,19 +74,28 @@
     </div>
   </header>
 
-  <main class="layout">
-    <section class="calendar-wrap">
-      <div class="weekdays">
-        <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
-      </div>
-      <div id="grid" class="grid"></div>
-    </section>
+  <main class="main">
+    <div class="layout" id="calendar-view">
+      <section class="calendar-wrap">
+        <div class="weekdays">
+          <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+        </div>
+        <div id="grid" class="grid"></div>
+      </section>
 
-    <aside class="sidebar">
-      <section class="panel" id="panel-today"></section>
-      <section class="panel" id="panel-due"></section>
-      <section class="panel" id="panel-multi"></section>
-    </aside>
+      <aside class="sidebar">
+        <section class="panel" id="panel-today"></section>
+        <section class="panel" id="panel-due"></section>
+        <section class="panel" id="panel-multi"></section>
+      </aside>
+    </div>
+
+    <!-- 表格视图：与 .layout 并列，由顶栏的视图切换决定谁显示。
+         内容全部由 public/tableview.js 渲染（工具栏 + 表体），这里只留容器 -->
+    <section class="table-view" id="table-view" hidden>
+      <div class="table-toolbar" id="table-toolbar"></div>
+      <div class="table-body" id="table-body"></div>
+    </section>
   </main>
 </div>
 

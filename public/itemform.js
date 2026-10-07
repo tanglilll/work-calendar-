@@ -14,10 +14,14 @@ import { archiveItem, invitePeople, removeItem, saveItem } from './items-flow.js
 
 /**
  * 表单的字段表：name 同时是 form 控件名、值对象的键与 payload 键；empty 是空值的归一结果
- * （文本字段空即 ''，服务端按未填处理；标签空即 null，服务端只接受白名单或 null）。
+ * （文本字段空即 ''，服务端按未填处理；白名单类字段——标签 / 完成度 / 紧急重要度——空即 null，
+ * 服务端把 '' 与 null 都当未填）。
  *
  * 读值（itemValues）与写 payload（itemPayload）都由这张表派发，所以「表单加了字段却忘了
  * 收集」没有落点——那是 21b42ba「进展被静默丢掉」的镜像风险。
+ *
+ * 表里只有「怎么取值 / 怎么归一空值」这一件事：取值是否合法（完成度越界、象限不在白名单）
+ * 一律留给服务端判（server/items.js 的 ITEM_FIELDS），客户端不静默改写。
  */
 export const ITEM_FORM_FIELDS = [
   { name: 'title', empty: '' },
@@ -25,7 +29,16 @@ export const ITEM_FORM_FIELDS = [
   { name: 'due_date', empty: '' },
   { name: 'tag', empty: null },
   { name: 'progress', empty: '' },
+  { name: 'percent_done', empty: null },
+  { name: 'quadrant', empty: null },
 ];
+
+/**
+ * 紧急重要度的选项：一份固定的白名单，**顺序即分组顺序**（前两个是「重要」的一组）。
+ * 这里只负责把选项画出来——值合不合法由服务端判（quadrant 的校验在 server/items.js
+ * 的 ITEM_FIELDS 里，字面量与这里同一份），所以表单不自己过滤、不自己改写。
+ */
+const QUADRANTS = ['重要且紧急', '重要不紧急', '紧急但不重要', '不紧急不重要'];
 
 /**
  * 从表单读取器（FormData，或任何提供 get(name) 的对象）按字段表取出普通值对象。读 DOM 的动作在调用方。
@@ -43,13 +56,19 @@ export function itemValues(reader) {
 /**
  * 值对象 → payload。不碰 DOM，因此 node:test 里能直接断言（见 test/itemform.test.js）。
  *
+ * 留空（没填、表单里没有这个控件、或值根本不是数字）一律归一成字段表的 empty，绝不送
+ * NaN / "NaN"；非空的原始值原样送出——越界的完成度（150）不在客户端悄悄改成 0/100，
+ * 交给服务端报错（校验的唯一落点是 server/items.js 的 ITEM_FIELDS）。
+ *
  * owner_ids 只在能直接改名单的人（manager/admin）身上出现——普通成员保存时不提交它，
  * 因此不会试图改名单（是否允许仍由服务端判一次）。id 已在 `itemValues` 里转成数字。
  */
 export function itemPayload(values, { canAssign = false } = {}) {
   const payload = {};
   for (const { name, empty } of ITEM_FORM_FIELDS) {
-    payload[name] = String(values[name] ?? '') || empty;
+    const raw = values[name];
+    const blank = raw === undefined || raw === null || raw === '' || Number.isNaN(raw);
+    payload[name] = blank ? empty : String(raw);
   }
   if (canAssign) {
     payload.owner_ids = Array.isArray(values.owner_ids) ? values.owner_ids.map(Number) : [];
@@ -88,6 +107,16 @@ export function openItemDialog(dialog, ctx) {
       tags.map(
         (t) =>
           `<option value="${esc(t)}"${item && item.tag === t ? ' selected' : ''}>${esc(t)}</option>`,
+      ),
+    )
+    .join('');
+
+  // 空选项「未标注」在选项表最前：编辑一条没标过象限的事项时由浏览器默认选中它
+  const quadrantOptions = ['<option value="">未标注</option>']
+    .concat(
+      QUADRANTS.map(
+        (q) =>
+          `<option value="${esc(q)}"${item && item.quadrant === q ? ' selected' : ''}>${esc(q)}</option>`,
       ),
     )
     .join('');
@@ -173,6 +202,19 @@ export function openItemDialog(dialog, ctx) {
             <span>标签</span>
             <select name="tag">${tagOptions}</select>
             <div class="field-error" data-error-for="tag"></div>
+          </div>
+          <div class="field">
+            <span>紧急重要度</span>
+            <select name="quadrant">${quadrantOptions}</select>
+            <div class="field-error" data-error-for="quadrant"></div>
+          </div>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <span>完成度（0–100 的整数，可留空）</span>
+            <input type="number" name="percent_done" min="0" max="100" step="1" value="${editing ? esc(item.percent_done ?? '') : ''}" placeholder="未填">
+            <div class="field-error" data-error-for="percent_done"></div>
           </div>
         </div>
 

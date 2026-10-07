@@ -4,6 +4,7 @@ import { SESSION_EXPIRED_MESSAGE, setSessionExpiredHandler } from './session.js'
 import { toast, formatMonth, setFieldErrors, showFormFailure } from './util.js';
 import { buildGrid, assignItems, gridHtml } from './calendar.js';
 import { renderPanels } from './sidebar.js';
+import { STATUS, renderTable, renderTableRows } from './tableview.js';
 import { openItemDialog } from './itemform.js';
 import { openAdminDialog } from './admin.js';
 import { openInvitesDialog } from './invites.js';
@@ -12,7 +13,13 @@ const els = {
   auth: document.getElementById('auth'),
   app: document.getElementById('app'),
   grid: document.getElementById('grid'),
+  monthNav: document.getElementById('month-nav'),
   monthLabel: document.getElementById('month-label'),
+  viewSwitch: document.getElementById('view-switch'),
+  calendarView: document.getElementById('calendar-view'),
+  tableView: document.getElementById('table-view'),
+  tableToolbar: document.getElementById('table-toolbar'),
+  tableBody: document.getElementById('table-body'),
   whoami: document.getElementById('whoami'),
   btnAdmin: document.getElementById('btn-admin'),
   btnInvites: document.getElementById('btn-invites'),
@@ -33,10 +40,13 @@ const NO_CAPABILITIES = Object.freeze({ seesAllItems: false, assignsOwner: false
  *
  * 字段按写入者分组，别处一律不要直接写 `state.x`：
  *
- * - **装载器**：`account` / `capabilities` / `roles` / `tags` / `palette` / `today` /
- *   `inviteCount` / `anchor` / `owners` / `items` —— 只由 `runRefresh()` 按声明表
+ * - **装载器**：`account` / `capabilities` / `roles` / `tags` / `quadrants` / `palette` / `today` /
+ *   `inviteCount` / `anchor` / `owners` / `items` / `archivedItems` —— 只由 `runRefresh()` 按声明表
  *   （`REFRESH_PLAN`）写，写哪些字段由表决定。
  * - **本地视图**：`anchor` 也由 `shiftMonth()` 写（用户翻月）；日切重拉不动它。
+ *   表格视图那一组（`view` / `table*` / `collapsedQuads` / `showArchived`）由表格的交互就地写。
+ *   它们**不许放模块级变量**：`clearSession()` 只把这份字面量重置回未登录形状，放外面
+ *   登出后换一个账号登录时，上一个账号的筛选、折叠与开关会跟着新账号。
  * - **会话收尾**：`clearSession()` 把整份重置回未登录形状——形状的定义只有这里一处。
  * - **连接**：`stream` 只由 `connectStream()` / `clearSession()` 写；**重拉字段一律不碰它**，
  *   这是「重拉不会重新建流」的结构保证（唯一建流点是 `boot()`）。
@@ -50,6 +60,9 @@ export function createState() {
     capabilities: { ...NO_CAPABILITIES },
     roles: [],
     tags: [],
+    // 紧急重要度的白名单（顺序即分组顺序）。服务端还没下发时为空数组，
+    // 表格的分组顺序退到「数据里首次出现的顺序」，不另抄一份四字面量。
+    quadrants: [],
     palette: [],
     today: '',
     // 待接受邀请的条数：顶栏「邀请」入口的角标
@@ -57,8 +70,23 @@ export function createState() {
     // 事项对话框里可选的 owner 名单
     owners: [],
     items: [],
+    // 归档视图（admin 专用，只读）。由装载器按 capabilities.managesAccounts 决定拉不拉，见 LOADERS
+    archivedItems: [],
     // 日历正显示的月份；登录 / self 全量重拉时回到 today 所在月
     anchor: { year: 0, month: 0 },
+    // —— 本地视图（用户自己的选择，重拉不动；登出即丢）——
+    // 当前视图：'calendar' | 'table'
+    view: 'calendar',
+    // 表格视图的筛选与排序（值就是工具栏控件的值，见 tableview.js）
+    tableStatus: '',
+    tableQuadrant: '',
+    tableKeyword: '',
+    tableSort: 'due_date',
+    tableDir: 'asc',
+    // 折叠的分组键（象限字面量 / UNLABELED / ARCHIVED_GROUP）
+    collapsedQuads: [],
+    // 「显示已完成」：只对 admin 出现；数据在 archivedItems
+    showArchived: false,
     stream: null,
   };
 }
@@ -68,7 +96,17 @@ const state = createState();
 const canAssign = () => state.capabilities.assignsOwner;
 
 /** 会话组字段：一次 `/api/bootstrap` 同时供这几个，装载时只写声明表要到的那些。 */
-const SESSION_FIELDS = ['account', 'capabilities', 'roles', 'tags', 'palette', 'today', 'anchor', 'inviteCount'];
+const SESSION_FIELDS = [
+  'account',
+  'capabilities',
+  'roles',
+  'tags',
+  'quadrants',
+  'palette',
+  'today',
+  'anchor',
+  'inviteCount',
+];
 
 /**
  * 装载器表：一格 = 一次网络请求，`fields` 是它提供的字段。
@@ -77,7 +115,8 @@ const SESSION_FIELDS = ['account', 'capabilities', 'roles', 'tags', 'palette', '
  * 收尾（关流、清状态、回登录页）后本轮到此为止，后面的装载器一个都不跑。未登录时去拉
  * 事项与名单只会拿到 401，再把「登录已失效」糊在一张刚打开的登录页上。
  *
- * 次序有意固定为「会话 → 名单 → 事项」：名单拿不到时会退到当前账号，会话得先落地。
+ * 次序有意固定为「会话 → 名单 → 事项 → 归档」：名单拿不到时会退到当前账号，会话得先落地
+ * （归档那一格按 `capabilities` 决定拉不拉，所以它必须排在会话之后）。
  */
 const LOADERS = [
   {
@@ -92,6 +131,9 @@ const LOADERS = [
         capabilities: b.capabilities,
         roles: b.roles,
         tags: b.tags,
+        // 象限白名单（顺序即分组顺序）。服务端还没下发时退到空数组：表格按数据里的
+        // 出现顺序分组，不在这里抄一份四字面量——那正是 items.js:40-42 防过的那类脱钩。
+        quadrants: b.quadrants ?? [],
         palette: b.palette,
         today: b.today,
         inviteCount: b.inviteCount ?? 0,
@@ -119,6 +161,29 @@ const LOADERS = [
       return { items };
     },
   },
+  {
+    fields: ['archivedItems'],
+    /**
+     * 归档视图（admin 专用、只读）：「显示已完成」打开时表格要有一份归档行。
+     *
+     * 它是**常驻**视图的数据（不像管理面板那样开一次拉一次），所以按装载器接进来：
+     * 别人归档一条事项时 `items` 触发会把这一页一起换新。非 admin 直接给空数组、
+     * 连请求都不发——后端那条路只会回 403，而刚被降权的人更不该把旧行留在屏幕上
+     * （capabilities 由排在前的会话装载器先落地，这里的次序是结构保证，见 LOADERS 说明）。
+     */
+    async load(client, target) {
+      if (!target.capabilities.managesAccounts) return { archivedItems: [] };
+      try {
+        const { items } = await client.archiveList();
+        return { archivedItems: items };
+      } catch {
+        // 拿不到归档那一页不该拖垮整次重拉（事项与能力照旧落地），而权限刚被收回时
+        // （SSE 的 self 还在路上、capabilities 还是旧的）后端一定回 403——退到空，
+        // 与 owners 那格的取舍同源：宁可少显示一页，也别把旧行留在屏幕上。
+        return { archivedItems: [] };
+      }
+    },
+  },
 ];
 
 /** 执行器能重拉的字段全集（从装载器表派生，所以「表里写了个没人提供的字段」能被抓住）。 */
@@ -131,18 +196,21 @@ export const RELOADABLE_FIELDS = Object.freeze(LOADERS.flatMap((loader) => loade
  *
  * | 触发    | 什么时候                                        | 重拉                    |
  * | ------- | ----------------------------------------------- | ----------------------- |
- * | `items` | 事项有增删改（SSE `items` / 本机刚写完一条）    | 事项                    |
- * | `admin` | 账号、注册申请有变（SSE `admin`）               | 事项 + owner 名单 + 能力 |
+ * | `items` | 事项有增删改（SSE `items` / 本机刚写完一条）    | 事项 + 归档             |
+ * | `admin` | 账号、注册申请有变（SSE `admin`）               | 事项 + owner 名单 + 能力 + 归档 |
  * | `self`  | 自己的账号状态变了（SSE `self` / 接受或拒绝邀请）| 全部                    |
  * | `login` | 登录之后                                        | 全部（一律全量）        |
  * | `day`   | 跨过午夜（日切定时器）                          | 只有 `today`，不动月份  |
+ *
+ * 归档跟着 `items` 一起重拉：表格视图是常驻视图，「显示已完成」开着时别人归档一条
+ * 事项，归档组不能停在旧的一页（非 admin 的那一格不发请求，代价是零）。
  *
  * `login` 全量是 `f24d4e7` 的教训：权限、角色、邀请角标、标签与调色板都只在 bootstrap 里
  * 下发，登录时只做局部重拉的话它们会停在未登录时的值——「管理」入口要刷新才出现。
  */
 export const REFRESH_PLAN = Object.freeze({
-  items: Object.freeze(['items']),
-  admin: Object.freeze(['items', 'owners', 'capabilities']),
+  items: Object.freeze(['items', 'archivedItems']),
+  admin: Object.freeze(['items', 'owners', 'capabilities', 'archivedItems']),
   self: Object.freeze([...RELOADABLE_FIELDS]),
   login: Object.freeze([...RELOADABLE_FIELDS]),
   day: Object.freeze(['today']),
@@ -211,21 +279,69 @@ function reloadSoon(trigger) {
   }, 120);
 }
 
+/**
+ * 表格视图的一屏数据：把 state 里的字段按 tableview.js 期望的形状交出去。
+ * 只读——表格的交互由下面的委托处理器写回 state，再重画。
+ */
+function tableViewOf() {
+  return {
+    items: state.items,
+    archivedItems: state.archivedItems,
+    today: state.today,
+    palette: state.palette,
+    quadrants: state.quadrants,
+    canArchive: state.capabilities.managesAccounts,
+    showArchived: state.showArchived,
+    status: state.tableStatus,
+    quadrant: state.tableQuadrant,
+    keyword: state.tableKeyword,
+    sortKey: state.tableSort,
+    sortDir: state.tableDir,
+    collapsed: state.collapsedQuads,
+  };
+}
+
+/** 表格的整块重画（工具栏 + 表体）：重拉、视图切换、筛选/排序变更都走这里。 */
+function paintTable() {
+  renderTable({ toolbar: els.tableToolbar, body: els.tableBody }, tableViewOf());
+}
+
+/** 折叠 / 展开一个分组：只动本地视图的 collapsedQuads，重画表体。 */
+function toggleQuadrant(key) {
+  state.collapsedQuads = state.collapsedQuads.includes(key)
+    ? state.collapsedQuads.filter((k) => k !== key)
+    : [...state.collapsedQuads, key];
+  renderTableRows({ toolbar: els.tableToolbar, body: els.tableBody }, tableViewOf());
+}
+
 function render() {
   // 未登录时界面是登录页，没有看板可渲染（会话在重拉途中消失时，runRefresh 已 clearSession）
   if (!state.account) return;
-  els.monthLabel.textContent = formatMonth(state.anchor.year, state.anchor.month);
 
-  const cells = buildGrid(state.anchor, state.today);
-  assignItems(cells, state.items);
-  els.grid.innerHTML = gridHtml(cells, state.palette);
+  const calendar = state.view === 'calendar';
+  els.monthNav.hidden = !calendar;
+  els.calendarView.hidden = !calendar;
+  els.tableView.hidden = calendar;
+  els.viewSwitch.querySelectorAll('[data-view]').forEach((btn) => {
+    btn.classList.toggle('is-active', btn.dataset.view === state.view);
+  });
 
-  renderPanels(
-    { today: els.panelToday, due: els.panelDue, multi: els.panelMulti },
-    state.items,
-    state.today,
-    state.palette,
-  );
+  if (calendar) {
+    els.monthLabel.textContent = formatMonth(state.anchor.year, state.anchor.month);
+
+    const cells = buildGrid(state.anchor, state.today);
+    assignItems(cells, state.items);
+    els.grid.innerHTML = gridHtml(cells, state.palette);
+
+    renderPanels(
+      { today: els.panelToday, due: els.panelDue, multi: els.panelMulti },
+      state.items,
+      state.today,
+      state.palette,
+    );
+  } else {
+    paintTable();
+  }
 
   els.whoami.textContent = `${state.account.username}（${state.account.role}）`;
   els.btnAdmin.hidden = !state.capabilities.managesAccounts;
@@ -420,6 +536,26 @@ function endSession() {
 
 setSessionExpiredHandler(endSession);
 
+/**
+ * 表格工具栏的控件 → 本地视图字段。按键名派发：表里没有的键会当场 TypeError，不静默。
+ * 关掉「显示已完成」时把「已完成」筛选一并收回——归档数据不再拉取，留着它只会得到空表。
+ */
+const TABLE_FIELDS = {
+  status: (value) => {
+    state.tableStatus = value;
+  },
+  quadrant: (value) => {
+    state.tableQuadrant = value;
+  },
+  sort: (value) => {
+    state.tableSort = value;
+  },
+  archived: (value) => {
+    state.showArchived = value;
+    if (!value && state.tableStatus === STATUS.done) state.tableStatus = '';
+  },
+};
+
 function bindEvents() {
   document.querySelectorAll('[data-auth-tab]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -433,10 +569,19 @@ function bindEvents() {
   document.getElementById('login-form').addEventListener('submit', onLogin);
   document.getElementById('apply-form').addEventListener('submit', onApply);
 
-  document.querySelector('.month-nav').addEventListener('click', (ev) => {
+  els.monthNav.addEventListener('click', (ev) => {
     const nav = ev.target.closest('[data-nav]')?.dataset.nav;
     if (nav === 'prev') shiftMonth(-1);
     else if (nav === 'next') shiftMonth(1);
+  });
+
+  // 视图切换：日历 / 表格。只改本地视图字段再重绘，不碰装载器（见 REFRESH_PLAN）
+  els.viewSwitch.addEventListener('click', (ev) => {
+    const view = ev.target.closest('[data-view]')?.dataset.view;
+    if (view !== 'calendar' && view !== 'table') return;
+    if (view === state.view) return;
+    state.view = view;
+    render();
   });
 
   document.getElementById('btn-new').addEventListener('click', () => openItem(null));
@@ -444,17 +589,51 @@ function bindEvents() {
   document.getElementById('btn-admin').addEventListener('click', openAdmin);
   document.getElementById('btn-logout').addEventListener('click', onLogout);
 
-  // 日历与侧栏都是重绘出来的，事件用委托挂在 #app 上
+  // 日历、侧栏与表格都是重绘出来的，事件用委托挂在 #app 上
   els.app.addEventListener('click', (ev) => {
     const addBtn = ev.target.closest('[data-add-date]');
     if (addBtn) {
       openItem(null, addBtn.dataset.addDate).catch((err) => toast(err.message, 'error'));
       return;
     }
+    // 表格工具栏的「+ 添加一行」：与顶栏「新建事项」同一条路径
+    if (ev.target.closest('[data-new-item]')) {
+      openItem(null).catch((err) => toast(err.message, 'error'));
+      return;
+    }
+    // 分组头折叠 / 展开
+    const groupHead = ev.target.closest('[data-quadrant-toggle]');
+    if (groupHead) {
+      toggleQuadrant(groupHead.dataset.quadrantToggle);
+      return;
+    }
+    // 排序方向的升 / 降
+    if (ev.target.closest('[data-table-dir]')) {
+      state.tableDir = state.tableDir === 'asc' ? 'desc' : 'asc';
+      paintTable();
+      return;
+    }
+    // 归档行不带 data-item-id（见 tableview.js 的 rowHtml）：点它不会走到这里
     const row = ev.target.closest('[data-item-id]');
     if (row) {
       openItem(Number(row.dataset.itemId)).catch((err) => toast(err.message, 'error'));
     }
+  });
+
+  // 表格工具栏的 select / 复选：按键名执行写入（表里没有的键会当场 TypeError，不静默）
+  els.app.addEventListener('change', (ev) => {
+    const el = ev.target.closest('[data-table-field]');
+    if (!el) return;
+    TABLE_FIELDS[el.dataset.tableField](el.type === 'checkbox' ? el.checked : el.value);
+    paintTable();
+  });
+
+  // 关键词是逐字输入的：只重画表体——重画工具栏会把输入框换成新节点，焦点与光标就没了
+  els.app.addEventListener('input', (ev) => {
+    const el = ev.target.closest('[data-table-keyword]');
+    if (!el) return;
+    state.tableKeyword = el.value;
+    renderTableRows({ toolbar: els.tableToolbar, body: els.tableBody }, tableViewOf());
   });
 }
 

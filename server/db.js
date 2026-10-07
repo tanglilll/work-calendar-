@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS items (
   updated_at  TEXT    NOT NULL,
   progress    TEXT,
   progress_updated_at TEXT,
+  percent_done INTEGER,
+  quadrant    TEXT,
   CHECK (due_date >= event_date),
   CHECK (color >= 0 AND color <= 11),
   CHECK (length(trim(title)) > 0)
@@ -122,12 +124,22 @@ function migrateToOwnerList(db) {
 
 /**
  * 后加的列：已存在的库用 ALTER 补上（幂等）。SQLite 加可空列不必重建表。
+ *
+ * 每列一道独立的门，而不是共用一道：门共用时，先加的那列一旦存在，
+ * 后加的列就永远补不上——「已经有 progress 的库」正是当前 schema 的库，
+ * 也是从 data/ 下那几个 demo 库升级上来的那条真实路径。
  */
 function ensureColumns(db) {
   const columns = db.prepare('PRAGMA table_info(items)').all().map((c) => c.name);
   if (!columns.includes('progress')) {
     db.exec('ALTER TABLE items ADD COLUMN progress TEXT');
     db.exec('ALTER TABLE items ADD COLUMN progress_updated_at TEXT');
+  }
+  if (!columns.includes('percent_done')) {
+    db.exec('ALTER TABLE items ADD COLUMN percent_done INTEGER');
+  }
+  if (!columns.includes('quadrant')) {
+    db.exec('ALTER TABLE items ADD COLUMN quadrant TEXT');
   }
 }
 

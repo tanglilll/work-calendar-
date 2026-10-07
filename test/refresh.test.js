@@ -9,7 +9,8 @@
  * 判据分四层：
  *
  * 1. **声明表**（纯映射）：登录 / `self` 全量且包含 `capabilities` 与 `inviteCount`；
- *    `admin` 含 owner 名单；`items` 只有事项；触发名写错直接抛——「漏拉一项」必须出声。
+ *    `admin` 含 owner 名单与归档；`items` 重拉事项与归档（归档组是常驻视图的一页）；
+ *    触发名写错直接抛——「漏拉一项」必须出声。非 admin 的归档那格不发请求，见执行器用例。
  * 2. **执行器**：用替身客户端跑一遍，断言「请求了哪些接口、写进了哪些字段」。`items`
  *    触发连别的字段都不许碰；`admin` 触发从 bootstrap 顺带拿回的标签 / 今天 / 角标不落地。
  * 3. **state 形状**：`inviteCount` 在初始形状里，重置回未登录形状只有一处定义。
@@ -36,6 +37,8 @@ const AUTHED = {
   capabilities: { seesAllItems: true, assignsOwner: true, managesAccounts: true },
   inviteCount: 3,
   tags: ['工作'],
+  // 象限白名单：值本身是替身（真实白名单在 server/config.js），这里只钉「随 bootstrap 落到 state」
+  quadrants: ['象限甲', '象限乙'],
   palette: ['#111111'],
   today: '2026-09-18',
 };
@@ -136,6 +139,7 @@ function fakeClient({
   bootstrap = authed(),
   owners = [{ id: 1, username: '我' }],
   items = [{ id: 7, title: '一条事项' }],
+  archivedItems = [{ id: 9, title: '一条归档事项' }],
   ownersFail = false,
 } = {}) {
   const calls = [];
@@ -153,6 +157,10 @@ function fakeClient({
     async listItems() {
       calls.push('listItems');
       return { items };
+    },
+    async archiveList() {
+      calls.push('archiveList');
+      return { items: archivedItems };
     },
   };
 }
@@ -197,13 +205,13 @@ describe('声明表', () => {
     assert.deepEqual([...fields].sort(), [...RELOADABLE_FIELDS].sort());
   });
 
-  test('admin 事件重拉 owner 名单（外加事项与能力）', () => {
-    assert.deepEqual(fieldsFor('admin'), ['items', 'owners', 'capabilities']);
+  test('admin 事件重拉 owner 名单（外加事项、能力与归档）', () => {
+    assert.deepEqual(fieldsFor('admin'), ['items', 'owners', 'capabilities', 'archivedItems']);
   });
 
-  test('items 事件只重拉事项', () => {
-    assert.deepEqual(REFRESH_PLAN.items, ['items']);
-    assert.deepEqual(fieldsFor('items'), ['items']);
+  test('items 事件重拉事项与归档（归档组是常驻视图的一页，不能停在旧值）', () => {
+    assert.deepEqual(REFRESH_PLAN.items, ['items', 'archivedItems']);
+    assert.deepEqual(fieldsFor('items'), ['items', 'archivedItems']);
   });
 
   test('日切只重拉 today（月份是本地视图，不跟着换）', () => {
@@ -228,27 +236,29 @@ describe('声明表', () => {
 });
 
 describe('执行器', () => {
-  test('items 触发：只发一次事项请求，别的字段一个都不动', async () => {
+  test('items 触发：普通成员只发一次事项请求，别的字段一个都不动', async () => {
     const client = fakeClient();
-    const target = signedIn();
+    const target = signedIn(); // capabilities 全是 false：归档那格不发请求
     const before = structuredClone(target);
     await runRefresh('items', { client, state: target });
     assert.deepEqual(client.calls, ['listItems']);
     assert.deepEqual(target.items, [{ id: 7, title: '一条事项' }]);
-    assertOnlyChanged(before, target, ['items']);
+    assert.deepEqual(target.archivedItems, [], '非 admin 的归档字段被清空，不把旧行留在屏幕上');
+    assertOnlyChanged(before, target, ['items', 'archivedItems']);
   });
 
-  test('admin 触发：事项 + 名单 + 能力一起落地，bootstrap 顺带带回来的不写', async () => {
+  test('admin 触发：事项 + 名单 + 能力 + 归档一起落地，bootstrap 顺带带回来的不写', async () => {
     const client = fakeClient();
     const target = signedIn(); // 有意给一份旧能力：这次重拉必须把它换掉
     const before = structuredClone(target);
     await runRefresh('admin', { client, state: target });
-    assert.deepEqual(client.calls, ['bootstrap', 'owners', 'listItems']);
+    assert.deepEqual(client.calls, ['bootstrap', 'owners', 'listItems', 'archiveList']);
     assert.deepEqual(target.items, [{ id: 7, title: '一条事项' }]);
     assert.deepEqual(target.owners, [{ id: 1, username: '我' }]);
     assert.deepEqual(target.capabilities, AUTHED.capabilities);
+    assert.deepEqual(target.archivedItems, [{ id: 9, title: '一条归档事项' }]);
     // 同一次 bootstrap 还带回了账号、角色、标签、今天、角标、锚点——没声明就不落地
-    assertOnlyChanged(before, target, ['items', 'owners', 'capabilities']);
+    assertOnlyChanged(before, target, ['items', 'owners', 'capabilities', 'archivedItems']);
   });
 
   test('登录后 capabilities 与 inviteCount 一定落地（「管理」入口与邀请角标靠它们）', async () => {
@@ -260,15 +270,17 @@ describe('执行器', () => {
     assert.equal(target.capabilities.managesAccounts, true);
     assert.equal(target.inviteCount, 3);
     assert.deepEqual(target.tags, ['工作']);
+    assert.deepEqual(target.quadrants, ['象限甲', '象限乙'], '表格的分组顺序与筛选下拉都从这份白名单来');
     assert.equal(target.today, '2026-09-18');
     assert.deepEqual(target.anchor, { year: 2026, month: 9 });
-    assert.deepEqual(client.calls, ['bootstrap', 'owners', 'listItems']);
+    // capabilities 由会话装载器先落地，归档那格才敢按它决定拉不拉（LOADERS 的次序就是保证）
+    assert.deepEqual(client.calls, ['bootstrap', 'owners', 'listItems', 'archiveList']);
   });
 
   test('合并多个触发取并集：先到的 admin 不会被后到的 items 顶掉', async () => {
     const client = fakeClient();
     const target = signedIn();
-    assert.deepEqual(fieldsFor(['admin', 'items']), ['items', 'owners', 'capabilities']);
+    assert.deepEqual(fieldsFor(['admin', 'items']), ['items', 'owners', 'capabilities', 'archivedItems']);
     await runRefresh(['admin', 'items'], { client, state: target });
     assert.ok(client.calls.includes('owners'), 'owner 名单不能因为 120ms 内又来了一条 items 就漏拉');
   });
@@ -364,6 +376,6 @@ describe('重拉不引入重连', () => {
 
     assert.equal(streams.length, 1, 'self 事件不该建第二条流（以前它会走 boot() → connectStream）');
     assert.equal(stream.closed, false, 'self 事件不该关掉现有连接');
-    assert.equal(fetches.length, fetchesBefore + 3, 'self 该全量重拉：bootstrap + 名单 + 事项');
+    assert.equal(fetches.length, fetchesBefore + 4, 'self 该全量重拉：bootstrap + 名单 + 事项 + 归档');
   });
 });

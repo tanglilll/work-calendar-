@@ -22,6 +22,8 @@ const VALUES = {
   due_date: '2026-09-02',
   tag: '工作',
   progress: '已立项',
+  percent_done: '40',
+  quadrant: '重要且紧急',
 };
 
 /** 勾选组不走字段表：要数已勾选的项，FormData.get 只给第一个（见 itemform.js 的注释）。 */
@@ -46,12 +48,34 @@ describe('itemPayload', () => {
       due_date: '',
       tag: null,
       progress: '',
+      percent_done: null,
+      quadrant: null,
     });
   });
 
   test('标签：空即 null——服务端只接受白名单里的值或 null', () => {
     assert.equal(itemPayload({ ...VALUES, tag: '' }).tag, null);
     assert.equal(itemPayload({ ...VALUES, tag: null }).tag, null);
+  });
+
+  test('完成度：留空即 null（不送 NaN / "NaN"），0 是有意义的取值不是留空', () => {
+    assert.equal(itemPayload({ ...VALUES, percent_done: '' }).percent_done, null);
+    assert.equal(itemPayload({ ...VALUES, percent_done: null }).percent_done, null);
+    assert.equal(itemPayload({ ...VALUES, percent_done: undefined }).percent_done, null);
+    assert.equal(itemPayload({ ...VALUES, percent_done: NaN }).percent_done, null);
+    assert.equal(itemPayload({ ...VALUES, percent_done: '0' }).percent_done, '0', '0% 与留空是两件事');
+  });
+
+  test('完成度：越界值原样送出，客户端不悄悄改写成 0 / 100——报错交给服务端', () => {
+    assert.equal(itemPayload({ ...VALUES, percent_done: '150' }).percent_done, '150');
+    assert.equal(itemPayload({ ...VALUES, percent_done: '-1' }).percent_done, '-1');
+    assert.equal(itemPayload({ ...VALUES, percent_done: '50.5' }).percent_done, '50.5');
+  });
+
+  test('紧急重要度：空选即 null，白名单里的字面量原样送出（不认得的也如实送出，由服务端判）', () => {
+    assert.equal(itemPayload({ ...VALUES, quadrant: '' }).quadrant, null);
+    assert.equal(itemPayload({ ...VALUES, quadrant: null }).quadrant, null);
+    assert.equal(itemPayload({ ...VALUES, quadrant: '不紧急不重要' }).quadrant, '不紧急不重要');
   });
 
   test('能改名单的人：勾选的 id 进 payload（字符串归一成数字，未勾选是空数组）', () => {
@@ -83,6 +107,8 @@ describe('itemValues', () => {
     assert.equal(values.title, '写周报');
     assert.equal(values.progress, '已立项');
     assert.equal(values.tag, null, '表单没有这个控件时 FormData.get 给 null，归一交给 itemPayload');
+    assert.equal(values.percent_done, null, '两个新字段同样按控件名读出，没填时读到 null');
+    assert.equal(values.quadrant, null);
   });
 
   test('整条纯链路：表单读取 → payload（浏览器里 collect() 走的正是这两步）', () => {
@@ -90,6 +116,8 @@ describe('itemValues', () => {
     fd.set('title', '写周报');
     fd.set('tag', '');
     fd.set('progress', '已立项');
+    fd.set('percent_done', '40');
+    fd.set('quadrant', '');
 
     assert.deepEqual(itemPayload(itemValues(fd)), {
       title: '写周报',
@@ -97,6 +125,8 @@ describe('itemValues', () => {
       due_date: '',
       tag: null,
       progress: '已立项',
+      percent_done: '40',
+      quadrant: null,
     });
   });
 });
@@ -115,6 +145,85 @@ describe('表单控件与字段表', () => {
     const wired = [...new Set([...ITEM_FORM_FIELDS.map((f) => f.name), ...READ_SEPARATELY])].sort();
 
     assert.deepEqual(inMarkup, wired, '控件名与字段表 / 单独读取清单必须一一对应');
+  });
+});
+
+/**
+ * 两个新字段（完成度 / 紧急重要度）在**渲染出来的标记**里的形状。node:test 没有 DOM，
+ * 只能断言标记本身；值的归一（留空 → 空值、越界原样送出）在 itemPayload 的测试里，
+ * 这里只管「控件长什么样、编辑态回显什么、错误有没有落点」。
+ */
+describe('完成度与紧急重要度的控件', () => {
+  const open = (ctx) => {
+    const dialog = fakeDialog();
+    openItemDialog(dialog, {
+      item: null,
+      today: '2026-09-18',
+      tags: ['工作'],
+      owners: [],
+      canAssign: false,
+      me: null,
+      onDone() {},
+      ...ctx,
+    });
+    return dialog.innerHTML;
+  };
+
+  /** 某个 <input> 的完整开始标签。 */
+  const controlIn = (html, name) => html.match(new RegExp(`<input[^>]*name="${name}"[^>]*>`))?.[0] ?? '';
+
+  const selectBody = (html, name) =>
+    html.match(new RegExp(`<select name="${name}">([\\s\\S]*?)</select>`))?.[1] ?? '';
+
+  /** 某个下拉的选项表：[值, 文案]，顺序即渲染顺序。 */
+  const optionsIn = (html, name) =>
+    [...selectBody(html, name).matchAll(/<option value="([^"]*)"[^>]*>([^<]*)</g)].map((m) => [
+      m[1],
+      m[2],
+    ]);
+
+  /** 某个下拉里带 selected 的选项值。 */
+  const selectedIn = (html, name) =>
+    [...selectBody(html, name).matchAll(/<option value="([^"]*)"\s+selected/g)].map((m) => m[1]);
+
+  test('完成度是 0–100 的整数输入：min / max / step 就是界面这一层的不变量，新建时不预填', () => {
+    const control = controlIn(open({}), 'percent_done');
+    assert.ok(control, '表单里必须有 name="percent_done" 的控件（不加控件就没有可编辑的落点）');
+    assert.match(control, /type="number"/);
+    assert.match(control, /min="0"/);
+    assert.match(control, /max="100"/);
+    assert.match(control, /step="1"/);
+    assert.match(control, /value=""/, '新建时留空——不预填 0：0% 与没填是两件事');
+  });
+
+  test('紧急重要度是下拉：空选项「未标注」在前，四个象限按分组顺序排列', () => {
+    assert.deepEqual(optionsIn(open({}), 'quadrant'), [
+      ['', '未标注'],
+      ['重要且紧急', '重要且紧急'],
+      ['重要不紧急', '重要不紧急'],
+      ['紧急但不重要', '紧急但不重要'],
+      ['不紧急不重要', '不紧急不重要'],
+    ]);
+  });
+
+  test('编辑：两个字段回显该事项的值，象限只选中它自己那一个', () => {
+    const html = open({ item: { percent_done: 40, quadrant: '不紧急不重要', owners: [] } });
+    assert.match(controlIn(html, 'percent_done'), /value="40"/);
+    assert.deepEqual(selectedIn(html, 'quadrant'), ['不紧急不重要']);
+  });
+
+  test('编辑一条没填过这两个字段的事项：回显为空白 / 未标注，不出现 null、undefined 字面量', () => {
+    const html = open({ item: { percent_done: null, quadrant: null, owners: [] } });
+    assert.match(controlIn(html, 'percent_done'), /value=""/);
+    assert.deepEqual(selectedIn(html, 'quadrant'), [], '没有 selected 时浏览器默认选第一个选项');
+    assert.equal(optionsIn(html, 'quadrant')[0][0], '', '默认选中的那个就是「未标注」');
+    assert.doesNotMatch(html, /value="null"|value="undefined"/);
+  });
+
+  test('两个字段都有字段级错误的落点：服务端 400 的 fields 直接落在控件下面', () => {
+    const html = open({});
+    assert.match(html, /data-error-for="percent_done"/);
+    assert.match(html, /data-error-for="quadrant"/);
   });
 });
 

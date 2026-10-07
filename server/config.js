@@ -25,6 +25,12 @@ export const PALETTE = [
 /** 标签白名单。事项最多挂一个，且必须取自这里。 */
 export const TAGS = ['工作', '个人', '会议', '出差', '紧急'];
 
+/**
+ * 紧急重要度白名单。事项最多挂一个，且必须取自这里；
+ * **顺序即分组顺序**——前端的分组与筛选都按这个次序排，不要另行排序。
+ */
+export const QUADRANTS = ['重要且紧急', '重要不紧急', '紧急但不重要', '不紧急不重要'];
+
 export const LIMITS = {
   TITLE_MAX: 200,
   /** 进展是一段自由文本，覆盖式更新 */
@@ -38,6 +44,9 @@ export const LIMITS = {
   SESSION_TTL_DAYS: 30,
   /** 归档视图单页条数 */
   ARCHIVE_PAGE_SIZE: 200,
+  /** 完成度是 0–100 的整数 */
+  PERCENT_DONE_MIN: 0,
+  PERCENT_DONE_MAX: 100,
 };
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -66,4 +75,9 @@ function toDateString(d) {
 
 export function isTagAllowed(tag) {
   return tag === null || tag === undefined || tag === '' || TAGS.includes(tag);
+}
+
+/** 与 isTagAllowed 同形：空值与白名单里的字面量放行，其余拒绝。 */
+export function isQuadrantAllowed(quadrant) {
+  return quadrant === null || quadrant === undefined || quadrant === '' || QUADRANTS.includes(quadrant);
 }

@@ -13,7 +13,7 @@
  * 而 invites 已经依赖 items，所以 items 反过来读它就会成环
  * （见 deleteItem 与 deleteSoleOwnedItems 两处删除路径）。
  */
-import { LIMITS, isValidDateString, isTagAllowed, TAGS } from './config.js';
+import { LIMITS, isValidDateString, isTagAllowed, isQuadrantAllowed, TAGS, QUADRANTS } from './config.js';
 import { canAccessItem, capabilitiesOf, ownerScope } from './visibility.js';
 import { accountChanged, ownerChanged, ownerChanges } from './changes.js';
 import { httpError } from './http.js';
@@ -21,7 +21,7 @@ import { httpError } from './http.js';
 const ITEM_COLUMNS = `
   i.id, i.title, i.event_date, i.due_date, i.tag, i.color,
   i.version, i.archived_at, i.created_at, i.updated_at,
-  i.progress, i.progress_updated_at
+  i.progress, i.progress_updated_at, i.percent_done, i.quadrant
 `;
 
 const FROM_ITEMS = 'FROM items i';
@@ -103,6 +103,42 @@ export const ITEM_FIELDS = [
         return { error: `进展最多 ${LIMITS.PROGRESS_MAX} 个字符` };
       }
       return { value: progress || null };
+    },
+  },
+  {
+    name: 'percent_done',
+    requiredOnCreate: false,
+    default: null,
+    /**
+     * 完成度：0–100 的整数（见 CONTEXT.md「完成度」）。表单来的值是字符串，
+     * 所以数字字符串也收；判空照 tag 写成 `=== null || === ''`，0 是合法取值、
+     * 不能被当成「没填」。刻意不加 SQL CHECK：校验的唯一落点是这里，
+     * 「新库建表」与「老库 ALTER」两条路径因此完全一致。
+     */
+    parse(raw) {
+      const error = `完成度必须是 ${LIMITS.PERCENT_DONE_MIN}–${LIMITS.PERCENT_DONE_MAX} 的整数`;
+      if (raw === null || raw === undefined) return { value: null };
+      if (typeof raw !== 'number' && typeof raw !== 'string') return { error };
+      const value = typeof raw === 'string' ? raw.trim() : raw;
+      if (value === '') return { value: null };
+      const n = Number(value);
+      if (!Number.isInteger(n) || n < LIMITS.PERCENT_DONE_MIN || n > LIMITS.PERCENT_DONE_MAX) {
+        return { error };
+      }
+      return { value: n };
+    },
+  },
+  {
+    name: 'quadrant',
+    requiredOnCreate: false,
+    default: null,
+    /** 紧急重要度：四个字面量之一，空值视为未标注（见 CONTEXT.md「紧急重要度」）。 */
+    parse(raw) {
+      if (raw === null || raw === undefined || raw === '') return { value: null };
+      if (!isQuadrantAllowed(raw)) {
+        return { error: `紧急重要度必须取自白名单：${QUADRANTS.join('、')}` };
+      }
+      return { value: raw };
     },
   },
 ];

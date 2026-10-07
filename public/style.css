@@ -376,6 +376,111 @@ table.data tr.archived td { color: var(--muted); }
 .pill.admin { border-color: #f0c6c6; color: var(--danger); }
 .pill.manager { border-color: #cbd9f6; color: var(--accent); }
 
+/* ---------- 表格视图 ---------- */
+
+/* 顶栏的日历 / 表格切换：两个按钮拼成一段，观感与登录页的 .tab.is-active 同源 */
+.view-switch { display: flex; }
+.view-switch button { border-radius: 0; border-left-width: 0; }
+.view-switch button:first-child { border-radius: var(--radius) 0 0 var(--radius); border-left-width: 1px; }
+.view-switch button:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
+.view-switch button.is-active { background: var(--accent-soft); border-color: #bcd0f7; color: var(--accent); font-weight: 600; }
+
+.table-view { padding: 14px; }
+.table-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.table-toolbar .tool,
+.table-toolbar .tool-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.table-toolbar .tool select { width: auto; max-width: 160px; padding: 5px 8px; }
+.table-toolbar .tool input[type="search"] { width: 200px; padding: 5px 8px; }
+.table-toolbar .tool-check input { width: auto; }
+.table-body {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0 12px 10px;
+  overflow-x: auto;
+}
+/* 11 列在窄屏下读不出来：给表格一个下限，宽度不够时由 .table-body 横向滚动
+   （表格只用既有的 table.data，.table-view 是外层 section 的类名） */
+.table-body table.data { min-width: 900px; }
+.table-view tr[data-item-id]:hover td { background: #f7f9fc; cursor: pointer; }
+.table-view td.cell-title { font-weight: 600; }
+.table-view td.cell-title .color-dot { margin-right: 6px; }
+.table-view td.cell-progress { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.table-view td.cell-percent { white-space: nowrap; }
+/* 分组头：整行可点（折叠 / 展开），记录数用面板标题那颗 count 的同一种观感 */
+.table-view tr.group-row td {
+  background: #fafbfd;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+.table-view tr.group-row:hover td { background: #f0f4fa; }
+.table-view tr.group-row .group-caret { margin-right: 4px; }
+.table-view tr.group-row .count {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 10px;
+  padding: 0 8px;
+  font-weight: 600;
+  margin-left: 8px;
+}
+.table-stats {
+  margin: 10px 2px 2px;
+  font-size: 13px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.table-stats .count {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 10px;
+  padding: 0 8px;
+  font-weight: 600;
+}
+.table-stats .hint { font-size: 12px; }
+
+/* 完成度：进度条 + 百分数，宽度按值给（内联 style，见 tableview.js 的 percentHtml） */
+.bar {
+  display: inline-block;
+  width: 64px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--line-soft);
+  overflow: hidden;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+.bar > span { display: block; height: 100%; background: var(--accent); }
+
+/* 状态与按时交付的徽章：只用颜色区分，不做装饰 */
+.pill.st-todo { color: var(--muted); }
+.pill.st-doing { border-color: #cbd9f6; color: var(--accent); }
+.pill.st-overdue { border-color: #f0c6c6; color: var(--danger); }
+.pill.st-done { background: #f4f6f8; color: var(--muted); }
+.pill.ontime { border-color: #bfe3cf; color: #157347; }
+.pill.late { border-color: #f0c6c6; color: var(--danger); }
+
 /* ---------- 提示条 ---------- */
 
 .toast {
