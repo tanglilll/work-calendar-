@@ -16,17 +16,31 @@
       <button type="button" class="tab" data-auth-tab="apply">申请账号</button>
     </div>
 
+    <!-- 字段级错误的落点：data-error-for 的名字必须与服务端 fields 的键一致（server/accounts.js 用 username / password / note），
+         写由 public/util.js 的 setFieldErrors 负责（test/auth-form-errors.test.js 钉住）。 -->
     <form id="login-form" class="auth-form" autocomplete="on">
-      <label>用户名<input name="username" autocomplete="username" required></label>
-      <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
+      <label>用户名<input name="username" autocomplete="username" required>
+        <span class="field-error" data-error-for="username"></span>
+      </label>
+      <label>密码<input name="password" type="password" autocomplete="current-password" required>
+        <span class="field-error" data-error-for="password"></span>
+      </label>
       <button type="submit" class="primary">登录</button>
       <p class="form-msg" data-msg data-kind="error"></p>
     </form>
 
     <form id="apply-form" class="auth-form" autocomplete="off" hidden>
-      <label>用户名<input name="username" required></label>
-      <label>密码<input name="password" type="password" required></label>
-      <label>备注<textarea name="note" rows="3" placeholder="说明你是谁，便于管理员核实"></textarea></label>
+      <label>用户名<input name="username" required>
+        <span class="field-error" data-error-for="username"></span>
+      </label>
+      <!-- 密码规则与服务端同源：数字必须等于 server/config.js 的 LIMITS.PASSWORD_MIN（test/auth-form-errors.test.js 钉住） -->
+      <label>密码<input name="password" type="password" minlength="8" required>
+        <span class="field-error" data-error-for="password"></span>
+      </label>
+      <p class="hint">密码至少 8 位。</p>
+      <label>备注<textarea name="note" rows="3" placeholder="说明你是谁，便于管理员核实"></textarea>
+        <span class="field-error" data-error-for="note"></span>
+      </label>
       <button type="submit" class="primary">提交申请</button>
       <p class="hint">提交后需管理员批准。批准之前不会创建账号，也无法登录。</p>
       <p class="form-msg" data-msg data-kind="error"></p>

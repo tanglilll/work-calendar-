@@ -1,7 +1,7 @@
 /** 前端入口：登录态、状态管理、实时同步与事件委托。 */
 import { api } from './api.js';
 import { SESSION_EXPIRED_MESSAGE, setSessionExpiredHandler } from './session.js';
-import { toast, formatMonth } from './util.js';
+import { toast, formatMonth, setFieldErrors, showFormFailure } from './util.js';
 import { buildGrid, assignItems, gridHtml } from './calendar.js';
 import { renderPanels } from './sidebar.js';
 import { openItemDialog } from './itemform.js';
@@ -343,6 +343,8 @@ async function onLogin(ev) {
   const msg = form.querySelector('[data-msg]');
   msg.dataset.kind = 'error';
   msg.textContent = '';
+  // 上一次失败留下的字段红字先清掉，否则它会一直挂到下次成功提交
+  setFieldErrors(form, null);
   const fd = new FormData(form);
   try {
     await api.login(String(fd.get('username') || ''), String(fd.get('password') || ''));
@@ -351,7 +353,8 @@ async function onLogin(ev) {
     // 只走局部重拉的话它们停在未登录时的值——「管理」入口要刷新才出现（f24d4e7）。
     await boot();
   } catch (err) {
-    msg.textContent = err.message;
+    // 失败呈现只有一条路径（见 util.showFormFailure）：message 与 err.fields 都不丢
+    showFormFailure(form, err);
   }
 }
 
@@ -360,6 +363,7 @@ async function onApply(ev) {
   const form = ev.currentTarget;
   const msg = form.querySelector('[data-msg]');
   msg.textContent = '';
+  setFieldErrors(form, null);
   const fd = new FormData(form);
   try {
     await api.apply({
@@ -371,8 +375,8 @@ async function onApply(ev) {
     msg.dataset.kind = 'ok';
     msg.textContent = '申请已提交。管理员批准后才能登录。';
   } catch (err) {
-    msg.dataset.kind = 'error';
-    msg.textContent = err.message;
+    // 服务端 400 的字段级细节在 err.fields 里（api.js:33）：「输入有误」不再是唯一可见信息
+    showFormFailure(form, err);
   }
 }
 
