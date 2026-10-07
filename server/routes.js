@@ -11,7 +11,7 @@
  */
 import { sendJson, readJson, httpError } from './http.js';
 import { readSessionToken, sessionCookie, clearSessionCookie, verifyPassword } from './auth.js';
-import { TAGS, PALETTE, LIMITS, todayLocal } from './config.js';
+import { TAGS, PALETTE, LIMITS, QUADRANTS, todayLocal } from './config.js';
 import { capabilitiesOf, ROLES } from './visibility.js';
 import { createLoginRateLimiter } from './ratelimit.js';
 
@@ -47,6 +47,9 @@ export function createApi({ items, accounts, sessions, invites, sse }) {
       // 待接受邀请的条数：角标在首屏就要准
       inviteCount: account ? invites.countFor(account) : 0,
       tags: TAGS,
+      // 象限白名单与 tags 同一个道理：值、顺序（分组顺序）都由服务端说了算，
+      // 前端不抄第二份。表格视图的分组顺序与事项对话框的下拉都读它。
+      quadrants: QUADRANTS,
       palette: PALETTE,
       today: todayLocal(),
       // 完整的 LIMITS 一次下发：不再手挑 key —— 手挑漏过 PROGRESS_MAX。

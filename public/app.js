@@ -421,6 +421,7 @@ async function openItem(id, presetDate) {
     item,
     today: presetDate || state.today,
     tags: state.tags,
+    quadrants: state.quadrants,
     owners: state.owners,
     canAssign: canAssign(),
     // 当前账号：新建时用来预勾自己（编辑时由该事项的名单决定，见 itemform.js）

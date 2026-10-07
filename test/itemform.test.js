@@ -29,6 +29,13 @@ const VALUES = {
 /** 勾选组不走字段表：要数已勾选的项，FormData.get 只给第一个（见 itemform.js 的注释）。 */
 const READ_SEPARATELY = ['owner_ids', 'invite_ids'];
 
+/**
+ * 象限白名单的替身：真实那份在 server/config.js（QUADRANTS），由 bootstrap 下发给前端。
+ * 对话框只负责把它画成选项——所以这里的值故意与真实白名单不同，用来证明选项跟着
+ * 传入的白名单走，而不是前端自己抄了一份。
+ */
+const QUADRANTS = ['象限甲', '象限乙', '象限丙', '象限丁'];
+
 describe('itemPayload', () => {
   test('字段表里每个字段都原样进 payload——表就是表单与 payload 之间的唯一接口', () => {
     for (const { name } of ITEM_FORM_FIELDS) {
@@ -160,6 +167,7 @@ describe('完成度与紧急重要度的控件', () => {
       item: null,
       today: '2026-09-18',
       tags: ['工作'],
+      quadrants: QUADRANTS,
       owners: [],
       canAssign: false,
       me: null,
@@ -196,20 +204,20 @@ describe('完成度与紧急重要度的控件', () => {
     assert.match(control, /value=""/, '新建时留空——不预填 0：0% 与没填是两件事');
   });
 
-  test('紧急重要度是下拉：空选项「未标注」在前，四个象限按分组顺序排列', () => {
+  test('紧急重要度是下拉：空选项「未标注」在前，其余选项就是传入的白名单本身、顺序照抄', () => {
     assert.deepEqual(optionsIn(open({}), 'quadrant'), [
       ['', '未标注'],
-      ['重要且紧急', '重要且紧急'],
-      ['重要不紧急', '重要不紧急'],
-      ['紧急但不重要', '紧急但不重要'],
-      ['不紧急不重要', '不紧急不重要'],
+      ['象限甲', '象限甲'],
+      ['象限乙', '象限乙'],
+      ['象限丙', '象限丙'],
+      ['象限丁', '象限丁'],
     ]);
   });
 
   test('编辑：两个字段回显该事项的值，象限只选中它自己那一个', () => {
-    const html = open({ item: { percent_done: 40, quadrant: '不紧急不重要', owners: [] } });
+    const html = open({ item: { percent_done: 40, quadrant: '象限丙', owners: [] } });
     assert.match(controlIn(html, 'percent_done'), /value="40"/);
-    assert.deepEqual(selectedIn(html, 'quadrant'), ['不紧急不重要']);
+    assert.deepEqual(selectedIn(html, 'quadrant'), ['象限丙']);
   });
 
   test('编辑一条没填过这两个字段的事项：回显为空白 / 未标注，不出现 null、undefined 字面量', () => {
@@ -318,6 +326,7 @@ describe('owner 勾选组在标记里的预勾选状态', () => {
       item: null,
       today: '2026-09-18',
       tags: [],
+      quadrants: QUADRANTS,
       owners: [...OTHERS, ME],
       canAssign: true,
       onDone() {},
@@ -343,11 +352,13 @@ describe('owner 勾选组在标记里的预勾选状态', () => {
     assert.doesNotMatch(html, /name="owner_ids"/);
   });
 
-  /** 传参这一环是「改了 itemform 却忘了改调用点」的落点：两条一起断言。 */
-  test('app.js 的调用点把当前账号传给了 openItemDialog', () => {
+  /** 传参这一环是「改了 itemform 却忘了改调用点」的落点：三条一起断言。 */
+  test('app.js 的调用点把当前账号与白名单传给了 openItemDialog', () => {
     const source = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
     const call = source.slice(source.indexOf('openItemDialog(els.itemDialog'));
-    assert.match(call.slice(0, call.indexOf('})')), /me:\s*state\.account/, '当前账号由调用点传入（见工单 04）');
+    const args = call.slice(0, call.indexOf('})'));
+    assert.match(args, /me:\s*state\.account/, '当前账号由调用点传入（见工单 04）');
+    assert.match(args, /quadrants:\s*state\.quadrants/, '象限白名单从 bootstrap 落到 state 再传进来，前端不抄第二份');
   });
 });
 

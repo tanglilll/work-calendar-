@@ -34,13 +34,6 @@ export const ITEM_FORM_FIELDS = [
 ];
 
 /**
- * 紧急重要度的选项：一份固定的白名单，**顺序即分组顺序**（前两个是「重要」的一组）。
- * 这里只负责把选项画出来——值合不合法由服务端判（quadrant 的校验在 server/items.js
- * 的 ITEM_FIELDS 里，字面量与这里同一份），所以表单不自己过滤、不自己改写。
- */
-const QUADRANTS = ['重要且紧急', '重要不紧急', '紧急但不重要', '不紧急不重要'];
-
-/**
  * 从表单读取器（FormData，或任何提供 get(name) 的对象）按字段表取出普通值对象。读 DOM 的动作在调用方。
  *
  * `owner_ids` 是勾选组：`get(name)` 只给第一个，必须走 `getAll`。它不进字段表（那张表管的是
@@ -93,7 +86,9 @@ export function initialOwnerIds({ item = null, me = null, canAssign = false } = 
 }
 
 export function openItemDialog(dialog, ctx) {
-  const { item, today, tags, owners, canAssign, me = null, onDone } = ctx;
+  // tags 与 quadrants 都是服务端下发的白名单（bootstrap），调用点从 state 传入：
+  // 值、以及象限的顺序（顺序即分组顺序）都只有服务端一份，前端不抄第二份。
+  const { item, today, tags, quadrants, owners, canAssign, me = null, onDone } = ctx;
   const editing = !!item;
 
   const isOwner = (id) => (item?.owners ?? []).some((o) => o.id === id);
@@ -114,7 +109,7 @@ export function openItemDialog(dialog, ctx) {
   // 空选项「未标注」在选项表最前：编辑一条没标过象限的事项时由浏览器默认选中它
   const quadrantOptions = ['<option value="">未标注</option>']
     .concat(
-      QUADRANTS.map(
+      quadrants.map(
         (q) =>
           `<option value="${esc(q)}"${item && item.quadrant === q ? ' selected' : ''}>${esc(q)}</option>`,
       ),

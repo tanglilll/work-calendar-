@@ -256,7 +256,7 @@ describe('三个对话框的开与关：头部 ✕ 是同一个词，点下去�
     {
       name: 'itemform',
       open: (dialog, ctx) => openItemDialog(dialog, ctx),
-      ctx: { item: null, today: '2026-09-18', tags: [], owners: [], canAssign: false, onDone() {} },
+      ctx: { item: null, today: '2026-09-18', tags: [], quadrants: [], owners: [], canAssign: false, onDone() {} },
     },
     {
       name: 'admin',
