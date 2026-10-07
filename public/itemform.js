@@ -97,11 +97,18 @@ export function openItemDialog(dialog, ctx) {
   // 勾选组预勾谁见 initialOwnerIds——编辑态给回该事项的名单，新建态预勾自己。
   const checked = new Set(initialOwnerIds({ item, me, canAssign }));
 
+  // 停用标签的宽限（服务端那一半在 items.js 的 tag.parse）：白名单收窄后，存量事项上还写着
+  // 旧值的那些，编辑框里要**看得见、留得住**——否则 select 落回「（无标签）」，用户没动它，
+  // 一保存标签就被静默抹掉了。所以把该事项自己那个不在白名单里的值补成一条选项并标「已停用」。
+  const retiredTag = item && item.tag && !tags.includes(item.tag) ? item.tag : null;
+  const tagChoices = retiredTag ? [...tags, retiredTag] : tags;
   const tagOptions = ['<option value="">（无标签）</option>']
     .concat(
-      tags.map(
+      tagChoices.map(
         (t) =>
-          `<option value="${esc(t)}"${item && item.tag === t ? ' selected' : ''}>${esc(t)}</option>`,
+          `<option value="${esc(t)}"${item && item.tag === t ? ' selected' : ''}>${esc(t)}${
+            t === retiredTag ? '（已停用）' : ''
+          }</option>`,
       ),
     )
     .join('');

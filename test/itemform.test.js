@@ -180,20 +180,6 @@ describe('完成度与紧急重要度的控件', () => {
   /** 某个 <input> 的完整开始标签。 */
   const controlIn = (html, name) => html.match(new RegExp(`<input[^>]*name="${name}"[^>]*>`))?.[0] ?? '';
 
-  const selectBody = (html, name) =>
-    html.match(new RegExp(`<select name="${name}">([\\s\\S]*?)</select>`))?.[1] ?? '';
-
-  /** 某个下拉的选项表：[值, 文案]，顺序即渲染顺序。 */
-  const optionsIn = (html, name) =>
-    [...selectBody(html, name).matchAll(/<option value="([^"]*)"[^>]*>([^<]*)</g)].map((m) => [
-      m[1],
-      m[2],
-    ]);
-
-  /** 某个下拉里带 selected 的选项值。 */
-  const selectedIn = (html, name) =>
-    [...selectBody(html, name).matchAll(/<option value="([^"]*)"\s+selected/g)].map((m) => m[1]);
-
   test('完成度是 0–100 的整数输入：min / max / step 就是界面这一层的不变量，新建时不预填', () => {
     const control = controlIn(open({}), 'percent_done');
     assert.ok(control, '表单里必须有 name="percent_done" 的控件（不加控件就没有可编辑的落点）');
@@ -298,6 +284,21 @@ function fakeDialog() {
   };
 }
 
+/** 某个 <select> 的选项体（三个 describe 都要读下拉，助手只有这一处）。 */
+function selectBody(html, name) {
+  return html.match(new RegExp(`<select name="${name}">([\\s\\S]*?)</select>`))?.[1] ?? '';
+}
+
+/** 某个下拉的选项表：[值, 文案]，顺序即渲染顺序。 */
+function optionsIn(html, name) {
+  return [...selectBody(html, name).matchAll(/<option value="([^"]*)"[^>]*>([^<]*)</g)].map((m) => [m[1], m[2]]);
+}
+
+/** 某个下拉里带 selected 的选项值。 */
+function selectedIn(html, name) {
+  return [...selectBody(html, name).matchAll(/<option value="([^"]*)"\s+selected/g)].map((m) => m[1]);
+}
+
 /** 从渲染出来的标记里读出某个勾选组已勾选的 id（属性顺序无关）。 */
 function checkedInMarkup(html, name = 'owner_ids') {
   return [...html.matchAll(/<input[^>]*>/g)]
@@ -383,5 +384,51 @@ describe('itemValues 的读取面（勾选组必须在这里取值）', () => {
   test('读取器没有 getAll（纯对象）也不炸——勾选组只在真的能读多值时取值', () => {
     const values = itemValues({ get: (n) => VALUES[n] });
     assert.equal(values.owner_ids, undefined);
+  });
+});
+
+/**
+ * 停用标签在编辑框里的呈现。服务端那一半（宽限规则）见 test/items.test.js 的「停用标签」。
+ *
+ * 这里守的是另一半：白名单里没有、但事项身上带着的那个值，必须**看得见、留得住**。
+ * 少了这条，`<select>` 会落回第一个选项「（无标签）」，用户没碰过标签、只是改了个标题，
+ * 一保存标签就被静默抹掉——正是 21b42ba「填的进展被静默丢掉」那一类事故的镜像。
+ */
+describe('停用标签的编辑态：看得见、留得住', () => {
+  const open = (ctx) => {
+    const dialog = fakeDialog();
+    openItemDialog(dialog, {
+      item: null,
+      today: '2026-09-18',
+      tags: ['工作', '个人'],
+      quadrants: QUADRANTS,
+      owners: [],
+      canAssign: false,
+      me: null,
+      onDone() {},
+      ...ctx,
+    });
+    return dialog.innerHTML;
+  };
+
+  test('编辑一条还写着停用标签的事项：补出这条选项、带上 selected、文案标「（已停用）」', () => {
+    const html = open({ item: { tag: '紧急', owners: [] } });
+
+    assert.deepEqual(selectedIn(html, 'tag'), ['紧急'], '选中的必须是该事项自己那个值，不能落回「（无标签）」');
+    assert.deepEqual(optionsIn(html, 'tag'), [
+      ['', '（无标签）'],
+      ['工作', '工作'],
+      ['个人', '个人'],
+      ['紧急', '紧急（已停用）'],
+    ]);
+  });
+
+  test('其它值不受影响：白名单里的标签照旧回显，新建时也不会多出一条停用项', () => {
+    assert.deepEqual(selectedIn(open({ item: { tag: '个人', owners: [] } }), 'tag'), ['个人']);
+    assert.deepEqual(optionsIn(open({}), 'tag'), [
+      ['', '（无标签）'],
+      ['工作', '工作'],
+      ['个人', '个人'],
+    ]);
   });
 });

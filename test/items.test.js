@@ -548,6 +548,68 @@ const FIELD_SAMPLES = {
 /** 基准跨度 09-01 → 09-30：日期样本都落在里面，不触碰「截止不得早于起始」。 */
 const spanDraft = (over) => draft({ event_date: '2026-09-01', due_date: '2026-09-30', ...over });
 
+/**
+ * 白名单收窄之后，存量数据怎么活。2026-10-07 停用了标签「紧急」（紧急与否改由「紧急重要度」表达）。
+ *
+ * 三条一起看：新数据不许再写这个值；**存量事项上已经写着的**不迁移、不抹掉；而「不抹掉」要成立，
+ * 必须有过这条宽限——表单总是把 tag 一起提交，一律按白名单拒会让「只改标题」也 400，
+ * 而表单若因为选项里没有它而落回「（无标签）」，标签就被静默抹掉了（那是 21b42ba 那一类事故的镜像）。
+ * 宽限只放行「本来就是它」的那一条，不是给停用值开口子。
+ */
+describe('停用标签：存量不被动，新值仍被拒', () => {
+  /** 直接写库造一条「收窄之前」的事项：那时的数据里有 tag='紧急'，现在用接口已经建不出来。 */
+  function legacyItem(app, ownerId) {
+    const now = new Date().toISOString();
+    const info = app.store.db
+      .prepare(
+        `INSERT INTO items (title, event_date, due_date, tag, color, version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+      )
+      .run('收窄之前建的事项', '2026-09-01', '2026-09-02', '紧急', 0, now, now);
+    const id = Number(info.lastInsertRowid);
+    // 名单也要补：事项至少一个 owner 是领域不变量，缺了它 updateItem 会在改动描述那一步就炸
+    app.store.db.prepare('INSERT INTO item_owners (item_id, account_id) VALUES (?, ?)').run(id, ownerId);
+    return id;
+  }
+
+  test('「紧急」不再是合法标签：新建时传它 → 400，错误信息里也不再列它', () => {
+    const { app, admin } = freshWorld();
+    try {
+      app.items.createItem(admin, draft({ tag: '紧急' }));
+      assert.fail('应当抛错');
+    } catch (err) {
+      assert.equal(err.status, 400);
+      assert.equal(err.fields.tag, `标签必须取自白名单：${TAGS.join('、')}`);
+      assert.ok(!err.fields.tag.includes('紧急'), '停用的取值不能再出现在提示里');
+      assert.ok(!TAGS.includes('紧急'), '白名单里已经没有它了');
+    }
+    app.close();
+  });
+
+  test('存量事项把自己那条停用标签原样带回 → 放行，其它字段照常改动', () => {
+    const { app, admin } = freshWorld();
+    const id = legacyItem(app, admin.id);
+    const { item } = app.items.updateItem(admin, id, { title: '改了标题', tag: '紧急', version: 1 });
+
+    assert.equal(item.title, '改了标题');
+    assert.equal(item.tag, '紧急', '改别的字段不该把存量旧值抹掉');
+    app.close();
+  });
+
+  test('把停用标签设到别的事项上 → 仍然 400（宽限只认「本来就是它」）', () => {
+    const { app, admin } = freshWorld();
+    const { item } = app.items.createItem(admin, draft({ tag: null }));
+    try {
+      app.items.updateItem(admin, item.id, { tag: '紧急', version: item.version });
+      assert.fail('应当抛错');
+    } catch (err) {
+      assert.equal(err.status, 400);
+      assert.equal(err.fields.tag, `标签必须取自白名单：${TAGS.join('、')}`);
+    }
+    app.close();
+  });
+});
+
 describe('可写字段表：每个字段的落库往返', () => {
   test('表的每个可写字段都有样本，样本里没有表外的字段', () => {
     const names = ITEM_FIELDS.map((field) => field.name);

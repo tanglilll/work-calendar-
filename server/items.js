@@ -40,7 +40,8 @@ const progressUpdatedAtFor = (progress) =>
  * - name：字段名，同时也是 SQL 列名；新建的 INSERT 与更新的动态 SET 都按它拼，
  *   写入层不再手写列清单（`21b42ba` 那次「新建时填的进展被静默丢掉」正是手写清单
  *   与校验层脱钩的产物）；
- * - parse(raw)：解析并校验一个值，返回 { value } 或 { error }；
+ * - parse(raw, current)：解析并校验一个值，返回 { value } 或 { error }。第二个参数是这条
+ *   事项的现值（新建时 null）——只有 tag 用它，为的是「停用的取值不拦存量数据」那条宽限；
  * - requiredOnCreate：新建时缺了它算不算字段错误（更新是部分更新，没带就不动这列）；
  * - default：新建时没带的可选字段用什么值补齐。
  *
@@ -84,9 +85,20 @@ export const ITEM_FIELDS = [
     name: 'tag',
     requiredOnCreate: false,
     default: null,
-    parse(raw) {
+    /**
+     * 标签：空即「没挂」，否则必须在白名单里。
+     *
+     * `current` 是这条事项的现值（新建时为 null），它只为一件事存在：**停用标签的宽限**。
+     * 白名单收窄后（例：2026-10-07 停用「紧急」），存量事项上还写着旧值的那些，改别的字段时
+     * 不该被拦下（保存直接失败），也不该被静默抹掉（表单里没有这个选项，一存就成了「无标签」）。
+     * 所以只放行「本来就是它」的那一条：把停用值**设到**另一条事项上仍然拒绝。
+     */
+    parse(raw, current) {
       if (raw === null || raw === '') return { value: null };
-      if (!isTagAllowed(raw)) return { error: `标签必须取自白名单：${TAGS.join('、')}` };
+      if (!isTagAllowed(raw)) {
+        if (current && current.tag === raw) return { value: raw };
+        return { error: `标签必须取自白名单：${TAGS.join('、')}` };
+      }
       return { value: raw };
     },
   },
@@ -233,7 +245,7 @@ export function createItems(store, colors, { pendingInviteesOf } = {}) {
           continue;
         }
       }
-      const { value, error } = field.parse(input[field.name]);
+      const { value, error } = field.parse(input[field.name], current);
       if (error !== undefined) errors[field.name] = error;
       else values[field.name] = value;
     }
