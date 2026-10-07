@@ -149,6 +149,10 @@ git ls-remote origin            # 同一症状在 git 侧的样子
 
 先把本机代理起来（7897 端口），再推。**代理没跑时只能本地提交**——`git commit` 不碰网络，远端同步留到代理可用之后。
 
+**同一句报错也会在代理正跑着的时候出现——先重试一次，再怀疑代理。**（2026-10-07 实测）`git push origin main` 报 `Connection closed by UNKNOWN port 65535` / `fatal: Could not read from remote repository`，但同一时刻 `netstat -ano | grep ':7897 '` 看到 7897 正在 LISTENING（PID 与多条 ESTABLISHED 连接）、`ssh -T git@github.com` 打出欢迎语、`git ls-remote --heads origin` 也正常返回——即转发链路整体是通的，只是这一次连接被掐了。**立刻重试同一条 `git push` 就成功了**（`361da41..4311c5f  main -> main`）。
+
+所以识别顺序要反过来：这个症状先当作**偶发断连**，重试一次；连续两次都这样、且 `netstat` 里 7897 为空时才按「代理没跑」处理。别只凭这一句报错就去重启代理或改 ssh 配置——`ls-remote` 通不能推出 `push` 一定通，反过来也一样。
+
 另：本机**没有安装 `gh` CLI**（`which gh` 为空）。所以即使远端可用，GitHub 的 issue / PR 工作流仍然走不了，本地 markdown 依旧是 tracker of record（见 `issue-tracker.md`）。
 
 ---
