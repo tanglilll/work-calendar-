@@ -14,7 +14,7 @@
  * （见 deleteItem 与 deleteSoleOwnedItems 两处删除路径）。
  */
 import { LIMITS, isValidDateString, isTagAllowed, isQuadrantAllowed, TAGS, QUADRANTS } from './config.js';
-import { canAccessItem, capabilitiesOf, ownerScope } from './visibility.js';
+import { canAccessItem, capabilitiesOf, memberScope, ownerScope } from './visibility.js';
 import { accountChanged, ownerChanged, ownerChanges } from './changes.js';
 import { httpError } from './http.js';
 
@@ -294,18 +294,25 @@ export function createItems(store, colors, { pendingInviteesOf } = {}) {
     return withOwners(db.prepare(sql).all(...params));
   }
 
-  /** 归档视图：admin 专用，展示全部账号的已归档事项，只读。 */
+  /**
+   * 归档视图（只读）：admin 看全部，其余账号只看**自己参与过的**那些。
+   *
+   * 「其余账号」把 manager 也算在里面——归档这边刻意比未归档窄一档（那边 manager 及于全部），
+   * 因为用户 2026-10-07 要的就是「自己的能看到、别人的看不到」，把人名换在别人身上也一样成立。
+   * 判据用 visibility.js 的 memberScope（不看角色那一条），因此这里没有第二条谓词。
+   * 归档事项**唯一**的读入口就是这里：单条读与写路径都还走 requireItemAccess 那道门。
+   */
   function listArchived(account) {
-    if (!capabilitiesOf(account).managesAccounts) throw httpError(403, '需要 admin 权限');
+    const scope = capabilitiesOf(account).managesAccounts ? { sql: '', params: [] } : memberScope(account);
     return withOwners(
       db
         .prepare(
           `SELECT ${ITEM_COLUMNS} ${FROM_ITEMS}
-            WHERE i.archived_at IS NOT NULL
+            WHERE i.archived_at IS NOT NULL${scope.sql}
             ORDER BY i.archived_at DESC, i.id DESC
             LIMIT ?`,
         )
-        .all(LIMITS.ARCHIVE_PAGE_SIZE),
+        .all(...scope.params, LIMITS.ARCHIVE_PAGE_SIZE),
     );
   }
 

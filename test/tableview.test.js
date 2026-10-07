@@ -412,7 +412,7 @@ describe('tableModel / tableHtml：分组、记录数与底部统计', () => {
   test('归档行单独成一组殿后，只读（不产出 data-item-id）', () => {
     const items = [make(1, { quadrant: '甲' })];
     const archived = [make(9, { archived_at: '2026-09-05T02:00:00.000Z' })];
-    const html = tableHtml(view({ items, archivedItems: archived, canArchive: true, showArchived: true }));
+    const html = tableHtml(view({ items, archivedItems: archived, archivesAll: true, showArchived: true }));
 
     assert.deepEqual(groupCountsIn(html), [['甲', 1], [ARCHIVED_GROUP, 1]]);
     assert.equal(statsCountIn(html), 2);
@@ -421,24 +421,30 @@ describe('tableModel / tableHtml：分组、记录数与底部统计', () => {
     assert.ok(html.includes('归档仅显示最近 200 条'), '归档只是最近一页，不许冒充全集');
   });
 
-  test('非 admin（或开关没开）不渲染归档行，哪怕 state 里带着数据', () => {
+  test('归档组的显示文案分「全部 / 我的」，但分组键不变（折叠状态认的是键）', () => {
     const archived = [make(9, { archived_at: '2026-09-05T02:00:00.000Z' })];
 
-    for (const over of [
-      { canArchive: false, showArchived: true },
-      { canArchive: true, showArchived: false },
-    ]) {
-      const html = tableHtml(view({ items: [make(1)], archivedItems: archived, ...over }));
-      assert.equal(statsCountIn(html), 1);
-      assert.ok(!html.includes(ARCHIVED_GROUP));
-      assert.ok(!/<tr class="archived">/.test(html));
-    }
+    const admin = tableHtml(view({ items: [make(1)], archivedItems: archived, archivesAll: true, showArchived: true }));
+    const member = tableHtml(view({ items: [make(1)], archivedItems: archived, showArchived: true }));
+
+    assert.ok(admin.includes('已归档（全部，只读）'), 'admin 看的是全库');
+    assert.ok(member.includes('已归档（我的，只读）'), '其余人只看自己参与过的，标签要说清');
+    assert.deepEqual(groupCountsIn(admin), groupCountsIn(member), '两边的分组键都是 ARCHIVED_GROUP');
+  });
+
+  test('开关没开时不渲染归档行，哪怕 state 里带着数据', () => {
+    const archived = [make(9, { archived_at: '2026-09-05T02:00:00.000Z' })];
+    const html = tableHtml(view({ items: [make(1)], archivedItems: archived, showArchived: false }));
+
+    assert.equal(statsCountIn(html), 1);
+    assert.ok(!html.includes(ARCHIVED_GROUP));
+    assert.ok(!/<tr class="archived">/.test(html));
   });
 
   test('归档行沿用同一套筛选（状态 = 已完成只在开关打开时才有行）', () => {
     const archived = [make(9, { archived_at: '2026-09-05T02:00:00.000Z' })];
     const html = tableHtml(
-      view({ items: [make(1)], archivedItems: archived, canArchive: true, showArchived: true, status: STATUS.done }),
+      view({ items: [make(1)], archivedItems: archived, archivesAll: true, showArchived: true, status: STATUS.done }),
     );
 
     assert.equal(statsCountIn(html), 1);
@@ -527,16 +533,17 @@ describe('象限色号：白名单每个取值一种颜色，行内与组头共�
 });
 
 describe('toolbarHtml：筛选 / 排序 / 显示已完成', () => {
-  test('非 admin 看不到「显示已完成」，状态里也没有「已完成」', () => {
-    const html = toolbarHtml({ items: [], canArchive: false, showArchived: false });
+  test('「显示已完成」对所有人都在——归档视图不再是 admin 独占，范围由服务端过滤', () => {
+    const html = toolbarHtml({ items: [], showArchived: false });
 
-    assert.ok(!html.includes('显示已完成'));
-    assert.ok(!html.includes(`>${STATUS.done}<`));
+    assert.ok(html.includes('显示已完成'), '普通成员也要能打开自己那份归档');
+    assert.ok(!html.includes('checked'), '默认不打开');
+    assert.ok(!html.includes(`>${STATUS.done}<`), '开关没开时不给「已完成」这一档——选中它必然是一张空表');
     for (const s of [STATUS.todo, STATUS.doing, STATUS.overdue]) assert.ok(html.includes(`>${s}<`));
   });
 
-  test('admin 打开开关后才有「显示已完成」与「已完成」这一档', () => {
-    const html = toolbarHtml({ items: [], canArchive: true, showArchived: true });
+  test('打开开关后有「显示已完成」（带 checked）与「已完成」这一档', () => {
+    const html = toolbarHtml({ items: [], showArchived: true });
 
     assert.ok(html.includes('显示已完成'));
     assert.ok(html.includes('checked'));

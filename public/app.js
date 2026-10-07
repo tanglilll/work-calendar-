@@ -70,7 +70,7 @@ export function createState() {
     // 事项对话框里可选的 owner 名单
     owners: [],
     items: [],
-    // 归档视图（admin 专用，只读）。由装载器按 capabilities.managesAccounts 决定拉不拉，见 LOADERS
+    // 归档视图（只读；自己参与过的，admin 是全部）。装载器不按角色拦，范围由服务端过滤，见 LOADERS
     archivedItems: [],
     // 日历正显示的月份；登录 / self 全量重拉时回到 today 所在月
     anchor: { year: 0, month: 0 },
@@ -85,7 +85,8 @@ export function createState() {
     tableDir: 'asc',
     // 折叠的分组键（象限字面量 / UNLABELED / ARCHIVED_GROUP）
     collapsedQuads: [],
-    // 「显示已完成」：只对 admin 出现；数据在 archivedItems
+    // 「显示已完成」：对所有人都在（每个人都能看自己参与过的归档事项），数据在 archivedItems，
+    // 且只在开关打开时才去取（见 LOADERS 与 TABLE_FIELDS.archived）
     showArchived: false,
     stream: null,
   };
@@ -164,21 +165,20 @@ const LOADERS = [
   {
     fields: ['archivedItems'],
     /**
-     * 归档视图（admin 专用、只读）：「显示已完成」打开时表格要有一份归档行。
+     * 归档视图（只读）：「显示已完成」打开时表格要有一份归档行。
      *
-     * 它是**常驻**视图的数据（不像管理面板那样开一次拉一次），所以按装载器接进来：
-     * 别人归档一条事项时 `items` 触发会把这一页一起换新。非 admin 直接给空数组、
-     * 连请求都不发——后端那条路只会回 403，而刚被降权的人更不该把旧行留在屏幕上
-     * （capabilities 由排在前的会话装载器先落地，这里的次序是结构保证，见 LOADERS 说明）。
+     * 每个人都能读这一页，读到的范围由**服务端**过滤（自己参与过的；admin 是全部），
+     * 所以这里不按角色拦——前端不持有可见性判据（见 visibility.js 的说明）。
+     * 开关关着（默认）时**不发这一枪**：绝大多数会话根本不需要那一页，省一次请求；
+     * 打开开关的那一下由 TABLE_FIELDS 的 archived 触发 `reload('archive')` 现取。
      */
     async load(client, target) {
-      if (!target.capabilities.managesAccounts) return { archivedItems: [] };
+      if (!target.showArchived) return { archivedItems: [] };
       try {
         const { items } = await client.archiveList();
         return { archivedItems: items };
       } catch {
-        // 拿不到归档那一页不该拖垮整次重拉（事项与能力照旧落地），而权限刚被收回时
-        // （SSE 的 self 还在路上、capabilities 还是旧的）后端一定回 403——退到空，
+        // 拿不到归档那一页不该拖垮整次重拉（事项与能力照旧落地）——退到空，
         // 与 owners 那格的取舍同源：宁可少显示一页，也别把旧行留在屏幕上。
         return { archivedItems: [] };
       }
@@ -210,6 +210,8 @@ export const RELOADABLE_FIELDS = Object.freeze(LOADERS.flatMap((loader) => loade
  */
 export const REFRESH_PLAN = Object.freeze({
   items: Object.freeze(['items', 'archivedItems']),
+  // 「显示已完成」打开时才用得上那一页，所以给它一个只有归档字段的触发（开关的 change 走它）
+  archive: Object.freeze(['archivedItems']),
   admin: Object.freeze(['items', 'owners', 'capabilities', 'archivedItems']),
   self: Object.freeze([...RELOADABLE_FIELDS]),
   login: Object.freeze([...RELOADABLE_FIELDS]),
@@ -290,7 +292,8 @@ function tableViewOf() {
     today: state.today,
     palette: state.palette,
     quadrants: state.quadrants,
-    canArchive: state.capabilities.managesAccounts,
+    // 只用来决定归档组怎么称呼（「全部」还是「我的」）：可见范围由服务端过滤，前端不判角色
+    archivesAll: state.capabilities.managesAccounts,
     showArchived: state.showArchived,
     status: state.tableStatus,
     quadrant: state.tableQuadrant,
@@ -554,6 +557,9 @@ const TABLE_FIELDS = {
   archived: (value) => {
     state.showArchived = value;
     if (!value && state.tableStatus === STATUS.done) state.tableStatus = '';
+    // 打开时才去取那一页：装载器在开关关着时不发这一枪（见 LOADERS），所以这里得自己补上；
+    // 关掉不用管，重拉回来时它照样给空数组（开关仍然关着）。
+    if (value) reload('archive').catch((err) => toast(err.message, 'error'));
   },
 };
 

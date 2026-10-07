@@ -238,18 +238,44 @@ describe('声明表', () => {
 describe('执行器', () => {
   test('items 触发：普通成员只发一次事项请求，别的字段一个都不动', async () => {
     const client = fakeClient();
-    const target = signedIn(); // capabilities 全是 false：归档那格不发请求
+    const target = signedIn(); // 开关关着（默认）：归档那格连请求都不发
     const before = structuredClone(target);
     await runRefresh('items', { client, state: target });
     assert.deepEqual(client.calls, ['listItems']);
     assert.deepEqual(target.items, [{ id: 7, title: '一条事项' }]);
-    assert.deepEqual(target.archivedItems, [], '非 admin 的归档字段被清空，不把旧行留在屏幕上');
+    assert.deepEqual(target.archivedItems, [], '开关关着：归档字段被清空，不把旧行留在屏幕上');
     assertOnlyChanged(before, target, ['items', 'archivedItems']);
+  });
+
+  test('「显示已完成」关着时谁都不取归档那一页（默认省一次请求）', async () => {
+    const client = fakeClient();
+    const member = signedIn();
+    const canManage = signedIn({
+      capabilities: { seesAllItems: true, assignsOwner: true, managesAccounts: true },
+    });
+
+    await runRefresh('items', { client, state: member });
+    await runRefresh('items', { client, state: canManage });
+
+    assert.deepEqual(client.calls, ['listItems', 'listItems'], '两次都只拉事项，没有 archiveList');
+  });
+
+  test('archive 触发：只取归档那一页（打开开关的那一下走它，不搭上事项）', async () => {
+    const client = fakeClient();
+    const target = signedIn({ showArchived: true });
+    const before = structuredClone(target);
+
+    await runRefresh('archive', { client, state: target });
+
+    assert.deepEqual(client.calls, ['archiveList']);
+    assert.deepEqual(target.archivedItems, [{ id: 9, title: '一条归档事项' }]);
+    assertOnlyChanged(before, target, ['archivedItems']);
   });
 
   test('admin 触发：事项 + 名单 + 能力 + 归档一起落地，bootstrap 顺带带回来的不写', async () => {
     const client = fakeClient();
-    const target = signedIn(); // 有意给一份旧能力：这次重拉必须把它换掉
+    // 开关打开：只有这时那一页才在重拉范围内（关着时它连请求都不发，见上一条用例）
+    const target = signedIn({ showArchived: true }); // 有意给一份旧能力：这次重拉必须把它换掉
     const before = structuredClone(target);
     await runRefresh('admin', { client, state: target });
     assert.deepEqual(client.calls, ['bootstrap', 'owners', 'listItems', 'archiveList']);
@@ -273,8 +299,8 @@ describe('执行器', () => {
     assert.deepEqual(target.quadrants, ['象限甲', '象限乙'], '表格的分组顺序与筛选下拉都从这份白名单来');
     assert.equal(target.today, '2026-09-18');
     assert.deepEqual(target.anchor, { year: 2026, month: 9 });
-    // capabilities 由会话装载器先落地，归档那格才敢按它决定拉不拉（LOADERS 的次序就是保证）
-    assert.deepEqual(client.calls, ['bootstrap', 'owners', 'listItems', 'archiveList']);
+    // 归档那格按开关决定拉不拉：登录时开关是关的（createState 的初值），所以这一次没有 archiveList
+    assert.deepEqual(client.calls, ['bootstrap', 'owners', 'listItems']);
   });
 
   test('合并多个触发取并集：先到的 admin 不会被后到的 items 顶掉', async () => {
@@ -376,6 +402,7 @@ describe('重拉不引入重连', () => {
 
     assert.equal(streams.length, 1, 'self 事件不该建第二条流（以前它会走 boot() → connectStream）');
     assert.equal(stream.closed, false, 'self 事件不该关掉现有连接');
-    assert.equal(fetches.length, fetchesBefore + 4, 'self 该全量重拉：bootstrap + 名单 + 事项 + 归档');
+    // 全量 = bootstrap + 名单 + 事项；归档那一页只在「显示已完成」打开时才在范围内（默认关着）
+    assert.equal(fetches.length, fetchesBefore + 3, 'self 该全量重拉：bootstrap + 名单 + 事项');
   });
 });

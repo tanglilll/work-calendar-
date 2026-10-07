@@ -72,5 +72,6 @@ export const api = {
   deleteAccount: (id) => request(`/api/admin/accounts/${id}`, { method: 'DELETE' }),
   transferItems: (id, toAccountId) =>
     request(`/api/admin/accounts/${id}/transfer`, { method: 'POST', body: { to_account_id: toAccountId } }),
-  archiveList: () => request('/api/admin/archive'),
+  // 归档列表：不在 admin 命名空间下——每个人都能读，读到的范围由服务端过滤（自己参与过的 / admin 看全部）
+  archiveList: () => request('/api/archive'),
 };

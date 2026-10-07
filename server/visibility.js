@@ -2,8 +2,9 @@
  * 可见性与角色 —— 全应用唯一的「谁能看见 / 处置哪些事项」判据。
  *
  * 三级角色逐级包含（见 CONTEXT.md「角色」）：user 只及于自己的事项；
- * manager 及于全部事项；admin 另有账号管理与归档查看。前端不被信任，
- * 这里的结果是唯一权威——路由层与 SSE 都问这里，不自己写谓词。
+ * manager 及于全部事项；admin 另有账号管理，且是唯一能看到全部归档事项的角色。
+ * 归档视图本身的可见范围与未归档一致——那条判据用下面的 memberScope（不看角色那一条）。
+ * 前端不被信任，这里的结果是唯一权威——路由层与 SSE 都问这里，不自己写谓词。
  *
  * 粗粒度看 capabilitiesOf，逐条事项看 canAccessItem，SQL 过滤用 ownerScope，
  * 推送过滤用 canReceiveEvent。
@@ -24,7 +25,7 @@ export function capabilitiesOf(account) {
     seesAllItems: manager,
     /** 能替他人建事项、能改事项的 owner */
     assignsOwner: manager,
-    /** 账号管理 + 归档查看（admin 独占） */
+    /** 账号管理，且是唯一能看到全部归档事项的角色 */
     managesAccounts,
   };
 }
@@ -39,15 +40,26 @@ export function canAccessItem(account, item) {
 }
 
 /**
+ * 「我是这条事项的成员之一」的 SQL 片段 —— **不看角色**，永远给条件。
+ *
+ * 与 ownerScope 只差一件事：它没有 seesAllItems 那条短路。归档视图要的正是这个——
+ * 「自己参与过的能看到、别人的看不到」，manager 也不例外（用户 2026-10-07 的要求）。
+ * 子句只写在这里一处，ownerScope 复用它，两边不可能漂。
+ */
+export function memberScope(account) {
+  return {
+    sql: ' AND EXISTS (SELECT 1 FROM item_owners m WHERE m.item_id = i.id AND m.account_id = ?)',
+    params: [account.id],
+  };
+}
+
+/**
  * listItems 的 owner 过滤片段：让 SQL 层的过滤与内存里的判据同源，
  * 不出现「列表查得出来但改不动」这种不一致。
  */
 export function ownerScope(account) {
   if (capabilitiesOf(account).seesAllItems) return { sql: '', params: [] };
-  return {
-    sql: ' AND EXISTS (SELECT 1 FROM item_owners m WHERE m.item_id = i.id AND m.account_id = ?)',
-    params: [account.id],
-  };
+  return memberScope(account);
 }
 
 /**

@@ -83,8 +83,21 @@ export function quadrantPillClass(quadrant) {
   return ['pill', quadrantClass(quadrant)].filter(Boolean).join(' ');
 }
 
-/** 归档行单独成一组（不参与象限分组），殿后。 */
+/**
+ * 归档行单独成一组（不参与象限分组），殿后。
+ *
+ * 这个串同时是**分组键**（折叠状态、筛选都认它），所以它不随角色变——变的只是显示文案，
+ * 见 archivedGroupLabel。键随显示文案变过一次的话，同一个人的折叠状态会在两处对不上。
+ */
 export const ARCHIVED_GROUP = '已归档（只读）';
+
+/**
+ * 归档组的显示文案：admin 看到的是全库，其余人看到的是自己参与过的那部分，要说清楚是哪种，
+ * 否则「怎么只有这几条」看起来像丢了数据。scope 由服务端过滤，这里只是把它讲出来。
+ */
+export function archivedGroupLabel(archivesAll) {
+  return archivesAll ? '已归档（全部，只读）' : '已归档（我的，只读）';
+}
 
 /**
  * 归档组是「最近一页」而不是全部：服务端按 archived_at DESC 取 LIMITS.ARCHIVE_PAGE_SIZE 条
@@ -272,7 +285,7 @@ export function tableModel(view = {}) {
     archivedItems = [],
     today = '',
     quadrants = [],
-    canArchive = false,
+    archivesAll = false,
     showArchived = false,
     status = '',
     quadrant = '',
@@ -284,18 +297,20 @@ export function tableModel(view = {}) {
   const filters = { today, status, quadrant, keyword };
   const sorter = { key: sortKey, dir: sortDir };
   const active = sortRows(filterRows(items, filters), sorter);
-  const archived =
-    canArchive && showArchived ? sortRows(filterRows(archivedItems, filters), sorter) : [];
+  const archived = showArchived ? sortRows(filterRows(archivedItems, filters), sorter) : [];
 
   const groups = groupByQuadrant(active, quadrants);
-  if (archived.length) groups.push({ quadrant: ARCHIVED_GROUP, items: archived });
+  if (archived.length) {
+    // 键（quadrant）保持稳定，只换显示文案：admin 看全部、其余人看自己参与过的
+    groups.push({ quadrant: ARCHIVED_GROUP, label: archivedGroupLabel(archivesAll), items: archived });
+  }
 
   return {
     groups,
     count: active.length + archived.length,
     archivedCount: archived.length,
-    // 归档组显示不等于「用户想看归档」：非 admin 即便 state 里开着也拿不到数据
-    showsArchive: canArchive && showArchived,
+    // 打开开关但一条归档都没有，也是「想看归档」——统计行据此决定要不要说那句「最近 200 条」
+    showsArchive: showArchived,
   };
 }
 
@@ -343,7 +358,7 @@ function groupHeadHtml(group, collapsed) {
   const nameClass = ['group-name', quadrantClass(group.quadrant)].filter(Boolean).join(' ');
   return `<tr class="group-row" data-quadrant-toggle="${esc(group.quadrant)}" title="点击折叠 / 展开">
       <td colspan="${COLUMNS.length}">
-        <span class="group-caret">${collapsed ? '▸' : '▾'}</span><span class="${nameClass}">${esc(group.quadrant)}</span>
+        <span class="group-caret">${collapsed ? '▸' : '▾'}</span><span class="${nameClass}">${esc(group.label ?? group.quadrant)}</span>
         <span class="count">记录数 ${group.items.length}</span>
       </td>
     </tr>`;
@@ -384,9 +399,9 @@ function optionHtml(value, label, selected) {
 
 /**
  * 工具栏：添加一行 / 筛选（状态、象限、关键词）/ 排序（列 + 升降）/ 显示已完成。
- *
- * 「显示已完成」只对 admin 出现（归档视图是 admin 独有的，后端同样会 403）；
- * 状态里也因此只在开关打开时才给「已完成」——否则普通成员选中它必然是一张空表。
+ * 「显示已完成」对所有人都在：归档视图不再是 admin 独占，每个人都能看**自己参与过的**已完成事项
+ * （admin 看的是全部）——可见范围由服务端过滤，前端只负责把开关画出来。
+ * 状态里只在开关打开时才给「已完成」——否则选中它必然是一张空表。
  * 控件的值都从 state 回写（selected / value），重画不会把用户的选择弄丢。
  */
 export function toolbarHtml(view = {}) {
@@ -394,7 +409,6 @@ export function toolbarHtml(view = {}) {
     items = [],
     archivedItems = [],
     quadrants = [],
-    canArchive = false,
     showArchived = false,
     status = '',
     quadrant = '',
@@ -404,15 +418,13 @@ export function toolbarHtml(view = {}) {
   } = view;
 
   const statuses = [STATUS.todo, STATUS.doing, STATUS.overdue];
-  if (canArchive && showArchived) statuses.push(STATUS.done);
+  if (showArchived) statuses.push(STATUS.done);
 
   const quadrantsForFilter = quadrantOptions([...items, ...archivedItems], quadrants);
 
-  const archiveToggle = canArchive
-    ? `<label class="tool-check"><input type="checkbox" data-table-field="archived"${
-        showArchived ? ' checked' : ''
-      }>显示已完成</label>`
-    : '';
+  const archiveToggle = `<label class="tool-check"><input type="checkbox" data-table-field="archived"${
+    showArchived ? ' checked' : ''
+  }>显示已完成</label>`;
 
   return `<button type="button" class="primary" data-new-item>+ 添加一行</button>
     <label class="tool">状态<select data-table-field="status">${optionHtml('', '全部', status)}${statuses

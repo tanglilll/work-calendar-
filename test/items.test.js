@@ -225,13 +225,18 @@ describe('archiveItem', () => {
     app.close();
   });
 
-  test('归档视图只给 admin，且列出已归档项', () => {
-    const { app, admin, zhao } = freshWorld();
+  test('归档视图：admin 看全部，其余人只看自己参与过的', () => {
+    const { app, admin, zhao, lin } = freshWorld();
     const { item } = app.items.createItem(admin, draft());
-    app.items.archiveItem(admin, item.id, item.version);
+    const archived = app.items.archiveItem(admin, item.id, item.version).item;
 
-    assert.equal(app.items.listArchived(admin).length, 1);
-    STATUS(() => app.items.listArchived(zhao), 403);
+    assert.deepEqual(
+      app.items.listArchived(admin).map((row) => row.id),
+      [archived.id],
+      'admin 看全部',
+    );
+    assert.deepEqual(app.items.listArchived(zhao), [], '跟自己无关的归档事项读不到，也不再是 403');
+    assert.deepEqual(app.items.listArchived(lin), []);
     app.close();
   });
 });

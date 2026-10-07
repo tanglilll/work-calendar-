@@ -207,7 +207,7 @@ export function createApi({ items, accounts, sessions, invites, sse }) {
   }
 
   function handleArchiveList(res, me) {
-    requireAdmin(me);
+    // 不做 admin 门：可见范围由领域层按「自己参与过的 / admin 看全部」过滤（服务端过滤，前端不被信任）
     return sendJson(res, 200, { items: items.listArchived(me) });
   }
 
@@ -233,6 +233,9 @@ export function createApi({ items, accounts, sessions, invites, sse }) {
 
     if (method === 'GET' && pathname === '/api/events') return handleEvents(res, me);
     if (method === 'GET' && pathname === '/api/items') return handleListItems(res, url, me);
+    // 归档视图：每个人都能读，但读到的是「自己参与过的」；admin 读到的才是全部。
+    // 它不在 /api/admin/ 命名空间下——那个前缀留给 admin 独占的操作。
+    if (method === 'GET' && pathname === '/api/archive') return handleArchiveList(res, me);
     if (method === 'POST' && pathname === '/api/items') return handleCreateItem(req, res, me);
     if (method === 'GET' && pathname === '/api/owners') return handleListOwners(res, me);
 
@@ -275,8 +278,6 @@ export function createApi({ items, accounts, sessions, invites, sse }) {
 
     const transferMatch = pathname.match(/^\/api\/admin\/accounts\/(\d+)\/transfer$/);
     if (transferMatch && method === 'POST') return handleTransfer(req, res, me, Number(transferMatch[1]));
-
-    if (method === 'GET' && pathname === '/api/admin/archive') return handleArchiveList(res, me);
 
     throw httpError(404, '接口不存在');
   }
